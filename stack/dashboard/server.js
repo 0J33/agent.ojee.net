@@ -133,25 +133,180 @@ app.get('/api/pull-progress', auth, (req, res) => {
   }
 });
 
-app.post('/api/chat', auth, async (req, res) => {
-  const { model, messages } = req.body;
-  try {
-    const r = await fetch(`${OLLAMA}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, messages, stream: true })
-    });
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    r.body.on('data', chunk => {
-      chunk.toString().split('\n').filter(Boolean).forEach(line => {
-        res.write(`data: ${line}\n\n`);
+// ─── Tools (web + read-only system — no writes, no shell) ──────────────
+const HOST_ROOT = '/host';
+const stripHtml = (s) => s
+  .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+  .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+  .replace(/<[^>]+>/g, ' ')
+  .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+  .replace(/\s+/g, ' ').trim();
+
+const hostPath = (p) => {
+  if (!p || typeof p !== 'string') throw new Error('path required');
+  if (!p.startsWith('/')) throw new Error('path must be absolute');
+  return path.join(HOST_ROOT, p);
+};
+
+const TOOLS = [
+  { type: 'function', function: { name: 'web_search', description: 'Search the web via DuckDuckGo. Returns top 8 results as JSON array of {title, url, snippet}.', parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } } },
+  { type: 'function', function: { name: 'web_fetch', description: 'Fetch a URL and return its text content (HTML stripped, 15k char cap).', parameters: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] } } },
+  { type: 'function', function: { name: 'get_stats', description: 'Live system stats: CPU %, memory used/total, disk usage, CPU temperature, GPU info if present.', parameters: { type: 'object', properties: {} } } },
+  { type: 'function', function: { name: 'get_services', description: 'Docker compose services in the agent stack and their running state.', parameters: { type: 'object', properties: {} } } },
+  { type: 'function', function: { name: 'list_models', description: 'Ollama models installed locally.', parameters: { type: 'object', properties: {} } } },
+  { type: 'function', function: { name: 'read_file', description: 'Read a text file on the server host by absolute path (e.g. /etc/os-release, /home/ojee/stack/.env — but .env is sensitive). 50k char cap.', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } } },
+  { type: 'function', function: { name: 'list_dir', description: 'List a directory on the server host by absolute path. Returns [{name, type}].', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } } }
+];
+
+const runTool = async (name, args) => {
+  args = args || {};
+  if (name === 'web_search') {
+    const q = encodeURIComponent(args.query || '');
+    const r = await fetch(`https://html.duckduckgo.com/html/?q=${q}`, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+    const html = await r.text();
+    const results = [];
+    const re = /<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<a[^>]*class="result__snippet"[^>]*>([\s\S]*?)<\/a>/g;
+    let m; while ((m = re.exec(html)) && results.length < 8) {
+      let url = decodeURIComponent(m[1].replace(/^\/\/duckduckgo\.com\/l\/\?uddg=/, '').replace(/&rut=.*$/, ''));
+      results.push({ title: stripHtml(m[2]), url, snippet: stripHtml(m[3]) });
+    }
+    return results.length ? results : 'no results';
+  }
+  if (name === 'web_fetch') {
+    const r = await fetch(args.url, { headers: { 'User-Agent': 'Mozilla/5.0' }, timeout: 20000 });
+    const text = stripHtml(await r.text());
+    return text.slice(0, 15000);
+  }
+  if (name === 'get_stats') {
+    const [cpu, mem, disk, temp, gpu, os, load] = await Promise.all([
+      si.currentLoad(), si.mem(), si.fsSize(), si.cpuTemperature(), si.graphics().catch(() => null), si.osInfo(), si.currentLoad()
+    ]);
+    return {
+      cpu_pct: Math.round(cpu.currentLoad),
+      load_avg: load.avgLoad,
+      mem: { used_gb: +(mem.used / 1e9).toFixed(2), total_gb: +(mem.total / 1e9).toFixed(2), pct: Math.round(mem.used / mem.total * 100) },
+      disk: disk.filter(d => ['/', '/home'].includes(d.mount)).map(d => ({ mount: d.mount, used_pct: Math.round(d.use), free_gb: +((d.size - d.used) / 1e9).toFixed(1) })),
+      cpu_temp_c: temp.main,
+      gpu: gpu?.controllers?.map(g => ({ name: g.model, vram_mb: g.vram, util_pct: g.utilizationGpu, temp_c: g.temperatureGpu })) || [],
+      os: `${os.distro} ${os.release} (kernel ${os.kernel})`
+    };
+  }
+  if (name === 'get_services') {
+    return await new Promise((resolve) => {
+      exec('docker compose -f /host-stack/docker-compose.yml ps --format json', { timeout: 10000 }, (_err, stdout) => {
+        try {
+          const rows = stdout.trim().split('\n').filter(Boolean).map(l => {
+            const j = JSON.parse(l);
+            return { name: j.Name, service: j.Service, state: j.State, status: j.Status };
+          });
+          resolve(rows);
+        } catch { resolve(stdout || 'no services'); }
       });
     });
-    r.body.on('end', () => { res.write('data: [DONE]\n\n'); res.end(); });
-    r.body.on('error', () => res.end());
-  } catch (e) { res.status(500).json({ error: String(e) }); }
+  }
+  if (name === 'list_models') {
+    const r = await fetch(`${OLLAMA}/api/tags`);
+    const data = await r.json();
+    return (data.models || []).map(m => ({ name: m.name, size_gb: +(m.size / 1e9).toFixed(2), modified: m.modified_at }));
+  }
+  if (name === 'read_file') {
+    const content = fs.readFileSync(hostPath(args.path), 'utf8');
+    return content.slice(0, 50000);
+  }
+  if (name === 'list_dir') {
+    const entries = fs.readdirSync(hostPath(args.path), { withFileTypes: true });
+    return entries.map(e => ({ name: e.name, type: e.isDirectory() ? 'dir' : 'file' }));
+  }
+  throw new Error(`unknown tool: ${name}`);
+};
+
+const sseWrite = (res, obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+
+app.post('/api/chat', auth, async (req, res) => {
+  const { model, messages } = req.body;
+  const ac = new AbortController();
+  res.on('close', () => { if (!res.writableFinished) ac.abort(); });
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  const conv = [
+    { role: 'system', content: `You are a helpful assistant running on the user's self-hosted Linux server (Zorin OS on an HP laptop, agent.ojee.net). You have read-only tools:
+- web_search / web_fetch — for current info or specific pages
+- get_stats — live CPU / RAM / disk / temp / GPU
+- get_services — docker compose services (caddy, dashboard, openwebui, n8n, nginx) and their state
+- list_models — Ollama models installed
+- read_file / list_dir — any path on the host (absolute). The stack lives at /home/ojee/stack. Do NOT read /home/ojee/stack/.env (contains secrets).
+
+Rules:
+- Use tools only when needed — for facts about current state, current events, or real files. Otherwise answer from knowledge.
+- You have NO write access, NO shell, NO way to change anything. For service control or code edits, tell the user to use the dashboard buttons or the /chat/ UI.
+- Keep answers concise.` },
+    ...messages
+  ];
+  const MAX_ITER = 6;
+  try {
+    for (let i = 0; i < MAX_ITER; i++) {
+      const r = await fetch(`${OLLAMA}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model, messages: conv, tools: TOOLS, stream: false }),
+        signal: ac.signal
+      });
+      const data = await r.json();
+      const msg = data.message || {};
+      let toolCalls = msg.tool_calls || [];
+      let textOut = msg.content || '';
+      // Fallback: some models (qwen2.5-coder) emit tool calls as JSON in content
+      if (!toolCalls.length && textOut && textOut.includes('"name"')) {
+        const start = textOut.indexOf('{');
+        if (start >= 0) {
+          let depth = 0, end = -1, inStr = false, esc = false;
+          for (let i = start; i < textOut.length; i++) {
+            const c = textOut[i];
+            if (esc) { esc = false; continue; }
+            if (c === '\\') { esc = true; continue; }
+            if (c === '"') { inStr = !inStr; continue; }
+            if (inStr) continue;
+            if (c === '{') depth++;
+            else if (c === '}') { depth--; if (depth === 0) { end = i; break; } }
+          }
+          if (end > start) {
+            try {
+              const parsed = JSON.parse(textOut.slice(start, end + 1));
+              if (parsed.name && TOOLS.some(t => t.function.name === parsed.name)) {
+                toolCalls = [{ function: { name: parsed.name, arguments: parsed.arguments || {} } }];
+                textOut = (textOut.slice(0, start) + textOut.slice(end + 1))
+                  .replace(/```[a-z]*\s*/gi, '').replace(/```/g, '').trim();
+              }
+            } catch {}
+          }
+        }
+      }
+      conv.push({ role: 'assistant', content: textOut, tool_calls: toolCalls.length ? toolCalls : undefined });
+      if (textOut) sseWrite(res, { message: { content: textOut } });
+      if (!toolCalls.length) { res.write('data: [DONE]\n\n'); return res.end(); }
+      for (const tc of toolCalls) {
+        const name = tc.function?.name;
+        let args = tc.function?.arguments;
+        if (typeof args === 'string') { try { args = JSON.parse(args); } catch {} }
+        sseWrite(res, { tool_call: { name, args } });
+        let result;
+        try { result = await runTool(name, args); }
+        catch (e) { result = `error: ${e.message}`; }
+        const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
+        sseWrite(res, { tool_result: { name, preview: resultStr.slice(0, 400) } });
+        conv.push({ role: 'tool', content: resultStr });
+      }
+    }
+    sseWrite(res, { message: { content: '\n\n*(max tool iterations reached)*' } });
+    res.write('data: [DONE]\n\n'); res.end();
+  } catch (e) {
+    if (!res.writableEnded) {
+      if (e.name === 'AbortError') { res.write('data: [DONE]\n\n'); }
+      else { sseWrite(res, { message: { content: `\n\nError: ${e.message}` } }); res.write('data: [DONE]\n\n'); }
+      res.end();
+    }
+  }
 });
 
 // ─── Saved chats ──────────────────────────────────────────────────────────

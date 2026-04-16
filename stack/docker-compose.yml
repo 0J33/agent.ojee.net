@@ -54,6 +54,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - /tmp:/host-tmp:ro
       - /home/ojee/stack:/host-stack:ro
+      - /:/host:ro
       - dashboard_data:/app/data
 
   openwebui:
@@ -66,6 +67,11 @@ services:
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
       - WEBUI_AUTH=true
       - WEBUI_URL=https://chat.agent.ojee.net
+      - ENABLE_RAG_WEB_SEARCH=True
+      - RAG_WEB_SEARCH_ENGINE=duckduckgo
+      - ENABLE_RAG_LOCAL_WEB_FETCH=True
+      - ENABLE_CODE_INTERPRETER=True
+      - CODE_EXECUTION_ENGINE=pyodide
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

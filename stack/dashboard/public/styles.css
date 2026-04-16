@@ -128,6 +128,8 @@ button { cursor: pointer; }
 }
 .chat-input:focus { border-color: var(--accent); }
 .chat-send { min-width: 60px; min-height: 32px; padding: 8px 12px; font-size: 0.65rem; }
+.chat-send.chat-stop { background: #e74c3c; border-color: #e74c3c; color: #fff; }
+.chat-send.chat-stop:hover:not(:disabled) { background: #ff6a5a; border-color: #ff6a5a; }
 
 /* ─── Typing ─── */
 .typing-dots { display: inline-flex; gap: 3px; font-size: 0.5rem; color: var(--accent); letter-spacing: 2px; }

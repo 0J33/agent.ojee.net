@@ -311,8 +311,9 @@ const panelChat = () => {
     : state.chat.map((m, i) => {
       const isLast = i === lastIdx;
       const streaming = isLast && m.role === 'assistant' && state.chatBusy;
+      const statusText = state.chatStatus && state.chatStatus !== 'typing' ? state.chatStatus : (m.content ? 'typing' : 'thinking');
       const label = m.role === 'assistant' && streaming
-        ? (m.content ? `${state.chatModel} · typing…` : `${state.chatModel} · ${state.chatStatus || 'thinking'}…`)
+        ? `${state.chatModel} · ${statusText}…`
         : m.role;
       const bodyEl = el('div', { class: 'md-body' });
       if (streaming && !m.content) {
@@ -355,6 +356,8 @@ const panelChat = () => {
     input.value = '';
     render();
 
+    const ac = new AbortController();
+    state.chatAbort = ac;
     try {
       const r = await fetch('/api/chat', {
         method: 'POST',
@@ -362,7 +365,8 @@ const panelChat = () => {
         body: JSON.stringify({
           model: state.chatModel,
           messages: state.chat.slice(0, -1).map(m => ({ role: m.role, content: m.content }))
-        })
+        }),
+        signal: ac.signal
       });
       const reader = r.body.getReader();
       const dec = new TextDecoder();
@@ -383,6 +387,16 @@ const panelChat = () => {
               if (state.chatStatus !== 'typing') state.chatStatus = 'typing';
               state.chat[state.chat.length - 1].content += j.message.content;
               render();
+            } else if (j.tool_call) {
+              state.chatStatus = `calling ${j.tool_call.name}`;
+              const args = j.tool_call.args || {};
+              const argStr = Object.entries(args).map(([k, v]) => `${k}: ${JSON.stringify(v).slice(0, 60)}`).join(', ');
+              const line = `\n\n\`⚙ ${j.tool_call.name}(${argStr})\`\n`;
+              state.chat[state.chat.length - 1].content += line;
+              render();
+            } else if (j.tool_result) {
+              state.chatStatus = 'thinking';
+              render();
             }
           } catch {}
         }
@@ -390,12 +404,21 @@ const panelChat = () => {
       // Auto-save if active chat exists
       if (state.activeChatId) { saveChat().catch(() => {}); }
     } catch (e) {
-      state.chat[state.chat.length - 1].content = `Error: ${e.message}`;
+      if (e.name === 'AbortError') {
+        const last = state.chat[state.chat.length - 1];
+        if (!last.content) last.content = '*(stopped)*';
+        else last.content += '\n\n*(stopped)*';
+      } else {
+        state.chat[state.chat.length - 1].content = `Error: ${e.message}`;
+      }
     }
+    state.chatAbort = null;
     state.chatBusy = false;
     state.chatStatus = null;
     render();
   };
+
+  const stop = () => { state.chatAbort?.abort(); };
 
   const modelSel = el('select', { class: 'chat-select', onchange: (e) => { state.chatModel = e.target.value; render(); } },
     ...(state.models.length ? state.models : [{ name: 'no models' }]).map(m =>
@@ -438,8 +461,11 @@ const panelChat = () => {
       log,
       el('div', { class: 'chat-form' },
         input,
-        el('button', { class: 'btn primary chat-send', onclick: send, disabled: state.chatBusy || !state.chatModel },
-          state.chatBusy ? '…' : 'Send')
+        el('button', {
+          class: 'btn primary chat-send' + (state.chatBusy ? ' chat-stop' : ''),
+          onclick: state.chatBusy ? stop : send,
+          disabled: !state.chatModel
+        }, state.chatBusy ? 'Stop' : 'Send')
       )
     )
   );
