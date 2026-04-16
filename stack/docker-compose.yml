@@ -1,0 +1,99 @@
+services:
+  caddy:
+    build: ./caddy
+    container_name: caddy
+    restart: unless-stopped
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    # Bind Caddy only to tailnet IP — prevents access from local wifi network or public internet.
+    # Tailnet IP is stable; if it ever changes, update here and in the Cloudflare CNAME.
+    ports:
+      - "100.117.98.52:80:80"
+      - "100.117.98.52:443:443"
+      - "100.117.98.52:443:443/udp"
+    environment:
+      - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN}
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+      - caddy_logs:/var/log/caddy
+    depends_on:
+      - dashboard
+      - openwebui
+      - n8n
+
+  # Kept for legacy tailnet URL access (tailscale serve → 127.0.0.1:8000)
+  nginx:
+    image: nginx:alpine
+    container_name: nginx
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8000:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - dashboard
+      - openwebui
+      - n8n
+
+  dashboard:
+    build: ./dashboard
+    container_name: dashboard
+    restart: unless-stopped
+    expose:
+      - "8080"
+    environment:
+      - DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD:-change-me}
+      - JWT_SECRET=${JWT_SECRET:-insecure-default-change-me}
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /tmp:/host-tmp:ro
+      - /home/ojee/stack:/host-stack:ro
+      - dashboard_data:/app/data
+
+  openwebui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: openwebui
+    restart: unless-stopped
+    expose:
+      - "8080"
+    environment:
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - WEBUI_AUTH=true
+      - WEBUI_URL=https://chat.agent.ojee.net
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - openwebui_data:/app/backend/data
+
+  n8n:
+    image: docker.n8n.io/n8nio/n8n
+    container_name: n8n
+    restart: unless-stopped
+    expose:
+      - "5678"
+    environment:
+      - N8N_HOST=flow.agent.ojee.net
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=https
+      - N8N_EDITOR_BASE_URL=https://flow.agent.ojee.net
+      - WEBHOOK_URL=https://flow.agent.ojee.net
+      - NODE_ENV=production
+      - N8N_SECURE_COOKIE=false
+      - GENERIC_TIMEZONE=Africa/Cairo
+      - TZ=Africa/Cairo
+    volumes:
+      - n8n_data:/home/node/.n8n
+
+volumes:
+  openwebui_data:
+  n8n_data:
+  caddy_data:
+  caddy_config:
+  caddy_logs:
+  dashboard_data:

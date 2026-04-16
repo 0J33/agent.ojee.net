@@ -1,0 +1,44 @@
+{
+  email contact@ojee.net
+}
+
+# Shared DNS-01 config snippet
+(cf_tls) {
+  tls {
+    dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+  }
+}
+
+# Dashboard
+agent.ojee.net {
+  import cf_tls
+  # Redirect legacy paths to the new subdomains (strip the /chat or /flow prefix)
+  handle_path /chat* {
+    redir https://chat.agent.ojee.net{uri} permanent
+  }
+  handle_path /flow* {
+    redir https://flow.agent.ojee.net{uri} permanent
+  }
+  reverse_proxy dashboard:8080
+  encode gzip
+  log {
+    output file /var/log/caddy/access.log {
+      roll_size 10mb
+      roll_keep 5
+    }
+  }
+}
+
+# Open WebUI
+chat.agent.ojee.net {
+  import cf_tls
+  reverse_proxy openwebui:8080
+  encode gzip
+}
+
+# n8n
+flow.agent.ojee.net {
+  import cf_tls
+  reverse_proxy n8n:5678
+  encode gzip
+}
