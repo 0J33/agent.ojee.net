@@ -305,7 +305,7 @@ const typingDots = () => el('span', { class: 'typing-dots' },
 
 // Inline SVG paths keyed by chip kind (all 14x14, currentColor stroke/fill).
 const SVG_PATHS = {
-  model:       '<path d="M9 3h6v2h2a2 2 0 0 1 2 2v2h2v2h-2v2h2v2h-2v2a2 2 0 0 1-2 2h-2v2H9v-2H7a2 2 0 0 1-2-2v-2H3v-2h2v-2H3v-2h2V7a2 2 0 0 1 2-2h2V3zm0 6v6h6V9H9z"/>',
+  model:       '<path fill="currentColor" d="M9 3h6v2h2a2 2 0 0 1 2 2v2h2v2h-2v2h2v2h-2v2a2 2 0 0 1-2 2h-2v2H9v-2H7a2 2 0 0 1-2-2v-2H3v-2h2v-2H3v-2h2V7a2 2 0 0 1 2-2h2V3zm0 6v6h6V9H9z"/>',
   web_search:  '<circle cx="10" cy="10" r="5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M14 14l5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>',
   web_fetch:   '<path d="M12 3v10m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
   get_stats:   '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
