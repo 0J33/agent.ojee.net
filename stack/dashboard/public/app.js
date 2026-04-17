@@ -860,6 +860,20 @@ const caViewHistory = async (conv) => {
   render();
 };
 
+const caDeleteHistory = async (conv, e) => {
+  if (e) e.stopPropagation();
+  if (!confirm(`Delete "${conv.title.slice(0, 60)}${conv.title.length > 60 ? '…' : ''}"?\n\nThis removes the conversation file from disk.`)) return;
+  const r = await api(`/api/code-agent/history/${encodeURIComponent(conv.project)}/${encodeURIComponent(conv.id)}`, { method: 'DELETE' });
+  if (r?.ok) {
+    state.codeAgent.historyList = state.codeAgent.historyList.filter(c => !(c.project === conv.project && c.id === conv.id));
+    if (state.codeAgent.historyView && state.codeAgent.historyView.id === conv.id) {
+      state.codeAgent.historyView = null;
+      state.codeAgent.historyMessages = [];
+    }
+    render();
+  }
+};
+
 const panelCodeAgent = () => {
   const ca = state.codeAgent;
   const activeSession = ca.sessions.find(s => s.id === ca.active);
@@ -921,6 +935,7 @@ const panelCodeAgent = () => {
         : el('div', { class: 'ca-hist-list' },
             ...ca.historyList.map(conv =>
               el('div', { class: 'saved-item', onclick: () => caViewHistory(conv) },
+                el('button', { class: 'saved-del', onclick: (e) => caDeleteHistory(conv, e), title: 'Delete' }, '\u00D7'),
                 el('div', { class: 'saved-title' }, conv.title),
                 el('div', { class: 'ca-hist-date' }, fmtTime(conv.modified))
               )

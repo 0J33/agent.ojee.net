@@ -547,11 +547,12 @@ Tool results may contain Title, description, og:description, Content sections. T
 
 ### n8n building
 
-Prefer n8n_quick_workflow — simple params, server builds valid JSON. Triggers: "schedule", "webhook", or "manual" (user clicks Run in n8n — perfect for test/demo flows). Examples:
-- Basic test: { name:"Test", trigger:"manual", steps:[{ kind:"set", field:"message", value:"Hello from n8n" }] }
-- Hourly ping: { name:"Hourly ping", trigger:"schedule", every_hours:1, steps:[{ kind:"http", url:"https://httpbin.org/get" }] }
-- Webhook LLM: { name:"Ask", trigger:"webhook", webhook_path:"ask", steps:[{ kind:"llm", prompt:"{{$json.body.question}}" }] }
-- Daily digest: { name:"Daily", trigger:"schedule", every_hours:24, steps:[{ kind:"llm", prompt:"motivational quote" }, { kind:"email", to:"me@x.com", subject:"Quote", text:"{{$json.response}}" }] }
+ONLY call n8n_* tools when the user EXPLICITLY asks to build, create, list, activate, or modify an n8n workflow. Words like "workflow", "automation", "cron job", "webhook", "schedule", "n8n", "build me", "set up" combined with an automation verb. Greetings ("hi", "hello"), questions, casual chat, or any unrelated request = do NOT call n8n_quick_workflow. If unsure, just chat back normally.
+
+When the user IS asking for a workflow, prefer n8n_quick_workflow. Triggers: "schedule", "webhook", or "manual". Examples of shape only (do not invoke unless user actually asks):
+- Schedule ping: trigger "schedule", every_hours N, step kind "http" with url
+- Webhook LLM: trigger "webhook", webhook_path "foo", step kind "llm" with a prompt
+- Digest: trigger "schedule", step kind "llm" then step kind "email"
 
 Only drop to n8n_create_workflow if quick_workflow can't express it. After create, give the user the workflow URL (https://agent.ojee.net/flow/workflow/<id>) and ask before activating.
 
@@ -585,13 +586,26 @@ const processChatJob = async (job, model, messages) => {
     job.listeners.clear();
   };
   const conv = [{ role: 'system', content: SYSTEM_PROMPT }, ...messages];
+  // Select the tool set based on the latest user turn. Small models misfire on
+  // short/greeting prompts (e.g. "hello" triggers n8n_quick_workflow just
+  // because it appears in an example). Filter tools so the model physically
+  // cannot call irrelevant ones.
+  const lastUser = (messages.filter(m => m.role === 'user').pop()?.content || '').trim();
+  const isGreeting = lastUser.length < 12 || /^(hi+|hey+|hello+|sup|yo+|ok|okay|thanks|thank you|cool|nice|lol|bye+|good\s+(morning|afternoon|evening|night))[\s.!?]*$/i.test(lastUser);
+  const wantsN8n = /\b(workflow|automation|automate|cron|n8n|webhook|schedule[rd]?|pipeline)\b/i.test(lastUser)
+    || /\b(build|create|make|set\s*up|list|activate|deactivate|modify|delete|remove|update)\b.{0,40}\b(flow|workflow|automation|job|webhook)\b/i.test(lastUser);
+  const pickTools = () => {
+    if (isGreeting) return [];
+    return wantsN8n ? TOOLS : TOOLS.filter(t => !t.function.name.startsWith('n8n_'));
+  };
   const MAX_ITER = 6;
   try {
     for (let i = 0; i < MAX_ITER; i++) {
+      const toolsForTurn = pickTools();
       const r = await fetch(`${OLLAMA}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model, messages: conv, tools: TOOLS, stream: false }),
+        body: JSON.stringify({ model, messages: conv, tools: toolsForTurn, stream: false }),
       });
       const data = await r.json();
       const msg = data.message || {};
@@ -803,6 +817,11 @@ app.get('/api/code-agent/history/:project/:id', auth, async (req, res) => {
   catch (e) { res.status(500).json({ error: String(e.message || e) }); }
 });
 
+app.delete('/api/code-agent/history/:project/:id', auth, async (req, res) => {
+  try { const r = await codeAgentReq(`/api/history/${encodeURIComponent(req.params.project)}/${encodeURIComponent(req.params.id)}`, { method: 'DELETE' }); res.status(r.status).json(await r.json()); }
+  catch (e) { res.status(500).json({ error: String(e.message || e) }); }
+});
+
 // Reconnect to an in-progress session stream
 app.get('/api/code-agent/sessions/:id/stream', auth, async (req, res) => {
   if (!codeAgentUp()) return res.status(503).json({ error: 'code agent not configured' });
@@ -833,6 +852,11 @@ app.get('/api/code-agent/history', auth, async (req, res) => {
 
 app.get('/api/code-agent/history/:project/:id', auth, async (req, res) => {
   try { const r = await codeAgentReq(`/api/history/${encodeURIComponent(req.params.project)}/${encodeURIComponent(req.params.id)}`); res.status(r.status).json(await r.json()); }
+  catch (e) { res.status(500).json({ error: String(e.message || e) }); }
+});
+
+app.delete('/api/code-agent/history/:project/:id', auth, async (req, res) => {
+  try { const r = await codeAgentReq(`/api/history/${encodeURIComponent(req.params.project)}/${encodeURIComponent(req.params.id)}`, { method: 'DELETE' }); res.status(r.status).json(await r.json()); }
   catch (e) { res.status(500).json({ error: String(e.message || e) }); }
 });
 

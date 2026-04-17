@@ -160,6 +160,16 @@ app.get('/api/history', auth, (req, res) => {
   } catch (e) { res.status(500).json({ error: String(e.message || e) }); }
 });
 
+// Delete a past conversation
+app.delete('/api/history/:project/:id', auth, (req, res) => {
+  const filePath = path.join(HOME, '.claude', 'projects', req.params.project, `${req.params.id}.jsonl`);
+  if (!safeExists(filePath)) return res.status(404).json({ error: 'not found' });
+  try {
+    fs.unlinkSync(filePath);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: String(e.message || e) }); }
+});
+
 // Load a specific past conversation by project + id
 app.get('/api/history/:project/:id', auth, (req, res) => {
   const filePath = path.join(HOME, '.claude', 'projects', req.params.project, `${req.params.id}.jsonl`);
