@@ -12,6 +12,22 @@ const el = (tag, attrs = {}, ...children) => {
   });
   return n;
 };
+const fmtTime = (ts) => {
+  if (!ts) return '';
+  const d = new Date(ts);
+  const now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  return sameDay
+    ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+};
+const fmtDur = (ms) => {
+  if (ms == null) return '';
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+  const s = Math.round(ms / 1000);
+  return `${Math.floor(s / 60)}m${s % 60}s`;
+};
 const fmt = (b) => {
   if (!b) return '0 B';
   if (b < 1024) return b + ' B';
@@ -402,7 +418,10 @@ const panelChat = () => {
 
       if (m.role === 'user') {
         return el('div', { class: 'chat-msg chat-user' },
-          el('div', { class: 'chat-label' }, 'user'),
+          el('div', { class: 'chat-label-row' },
+            el('div', { class: 'chat-label' }, 'user'),
+            m.ts ? el('span', { class: 'chat-time' }, fmtTime(m.ts)) : null
+          ),
           bodyEl
         );
       }
@@ -415,7 +434,8 @@ const panelChat = () => {
       const chipRow = el('div', { class: 'chat-chips' },
         model ? chip('model', model, svgChip('model')) : null,
         ...toolList.map(t => chip('tool', t, svgChip(t))),
-        statusText ? chip('status', statusText + '…', svgChip('status')) : null
+        statusText ? chip('status', statusText + '…', svgChip('status')) : null,
+        m.ts && !streaming ? el('span', { class: 'chat-time' }, fmtTime(m.ts) + (m.elapsed_ms ? ' · ' + fmtDur(m.elapsed_ms) : '')) : null
       );
       return el('div', { class: 'chat-msg chat-assistant' }, chipRow, bodyEl);
     });
@@ -435,8 +455,9 @@ const panelChat = () => {
   const send = async () => {
     const text = input.value.trim();
     if (!text || state.chatBusy || !state.chatModel) return;
-    state.chat.push({ role: 'user', content: text });
-    state.chat.push({ role: 'assistant', content: '', model: state.chatModel, tools: [] });
+    const now = Date.now();
+    state.chat.push({ role: 'user', content: text, ts: now });
+    state.chat.push({ role: 'assistant', content: '', model: state.chatModel, tools: [], ts: now, elapsed_ms: null });
     state.chatBusy = true;
     state.chatStatus = 'thinking';
     state.chatDirty = true;
@@ -498,6 +519,8 @@ const panelChat = () => {
         state.chat[state.chat.length - 1].content = `Error: ${e.message}`;
       }
     }
+    const last = state.chat[state.chat.length - 1];
+    if (last && last.role === 'assistant' && last.ts && last.elapsed_ms == null) last.elapsed_ms = Date.now() - last.ts;
     state.chatAbort = null;
     state.chatBusy = false;
     state.chatStatus = null;
@@ -604,8 +627,9 @@ const caClose = async (id, e) => {
 
 const caSend = async (text) => {
   if (!state.codeAgent.active || !text.trim() || state.codeAgent.busy) return;
-  state.codeAgent.messages.push({ role: 'user', text });
-  state.codeAgent.messages.push({ role: 'assistant', text: '' });
+  const now = Date.now();
+  state.codeAgent.messages.push({ role: 'user', text, ts: now });
+  state.codeAgent.messages.push({ role: 'assistant', text: '', ts: now, elapsed_ms: null });
   state.codeAgent.busy = true;
   state.codeAgent.status = 'thinking';
   render();
@@ -635,7 +659,7 @@ const caSend = async (text) => {
           const evt = JSON.parse(p);
           const last = state.codeAgent.messages[state.codeAgent.messages.length - 1];
           if (evt.type === 'text') { last.text += evt.text; state.codeAgent.status = 'typing'; render(); }
-          else if (evt.type === 'tool_use') { state.codeAgent.messages.push({ role: 'tool_use', tool: evt.tool, input: evt.input }); state.codeAgent.messages.push({ role: 'assistant', text: '' }); state.codeAgent.status = `running ${evt.tool}`; render(); }
+          else if (evt.type === 'tool_use') { state.codeAgent.messages.push({ role: 'tool_use', tool: evt.tool, input: evt.input, ts: Date.now() }); state.codeAgent.messages.push({ role: 'assistant', text: '', ts: Date.now(), elapsed_ms: null }); state.codeAgent.status = `running ${evt.tool}`; render(); }
           else if (evt.type === 'tool_result') { state.codeAgent.status = 'thinking'; render(); }
           else if (evt.type === 'result') { state.codeAgent.status = evt.is_error ? 'error' : null; }
         } catch {}
@@ -650,6 +674,11 @@ const caSend = async (text) => {
   // Drop trailing empty assistant messages
   while (state.codeAgent.messages.length && state.codeAgent.messages[state.codeAgent.messages.length - 1].role === 'assistant' && !state.codeAgent.messages[state.codeAgent.messages.length - 1].text) {
     state.codeAgent.messages.pop();
+  }
+  // Stamp elapsed time on the last assistant message with a pending timer
+  for (let i = state.codeAgent.messages.length - 1; i >= 0; i--) {
+    const m = state.codeAgent.messages[i];
+    if (m.role === 'assistant' && m.ts && m.elapsed_ms == null) { m.elapsed_ms = Date.now() - m.ts; break; }
   }
   state.codeAgent.busy = false;
   state.codeAgent.status = null;
@@ -684,13 +713,21 @@ const panelCodeAgent = () => {
   }
 
   // Session chat view
-  const msgs = ca.messages.map(m => {
+  const msgs = ca.messages.map((m, i) => {
     if (m.role === 'tool_use') {
       const input = typeof m.input === 'object' ? JSON.stringify(m.input).slice(0, 120) : String(m.input || '').slice(0, 120);
       return el('div', { class: 'ca-tool' }, svgChip('list_models'), el('span', {}, `${m.tool}(${input})`));
     }
+    const isLast = i === ca.messages.length - 1;
+    const streaming = isLast && m.role === 'assistant' && ca.busy;
+    const timeChip = m.ts && !streaming
+      ? el('span', { class: 'chat-time' }, fmtTime(m.ts) + (m.elapsed_ms ? ' · ' + fmtDur(m.elapsed_ms) : ''))
+      : null;
     return el('div', { class: m.role === 'user' ? 'chat-msg chat-user' : 'chat-msg chat-assistant' },
-      el('div', { class: 'chat-label' }, m.role === 'user' ? 'user' : 'claude'),
+      el('div', { class: 'chat-label-row' },
+        el('div', { class: 'chat-label' }, m.role === 'user' ? 'user' : 'claude'),
+        timeChip
+      ),
       el('div', { class: 'md-body', html: m.role === 'assistant' ? renderMarkdown(m.text) : undefined }, m.role === 'user' ? m.text : null)
     );
   });

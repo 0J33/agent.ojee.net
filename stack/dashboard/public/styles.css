@@ -151,6 +151,12 @@ button { cursor: pointer; }
 .ca-active-cwd { color: var(--text-dimmer); font-family: ui-monospace, monospace; font-size: 0.6rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
 .ca-tool { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; margin: 4px 0; background: rgba(120, 140, 180, 0.08); border: 1px solid var(--border-dim); border-radius: 4px; font-family: ui-monospace, monospace; font-size: 0.6rem; color: var(--text-dimmer); }
 
+/* Timestamps + durations on chat messages */
+.chat-label-row { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.chat-label-row .chat-label { margin-bottom: 0; }
+.chat-time { font-size: 0.58rem; color: var(--text-dimmer); font-family: ui-monospace, monospace; letter-spacing: 0.02em; }
+.chat-chips .chat-time { margin-left: auto; padding-right: 4px; }
+
 /* Top nav tabs */
 .top-nav { display: flex; gap: 4px; align-items: center; }
 .nav-btn { background: none; border: 1px solid transparent; color: var(--text-dimmer); font-size: 0.7rem; font-weight: 600; padding: 6px 12px; border-radius: 4px; cursor: pointer; letter-spacing: 0.03em; text-transform: uppercase; }
