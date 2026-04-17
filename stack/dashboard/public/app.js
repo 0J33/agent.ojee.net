@@ -944,12 +944,18 @@ const panelCodeAgent = () => {
           const input = typeof m.input === 'object' ? JSON.stringify(m.input).slice(0, 120) : String(m.input || '').slice(0, 120);
           return el('div', { class: 'ca-tool' }, svgChip('list_models'), el('span', {}, `${m.tool}(${input})`));
         }
-        return el('div', { class: m.role === 'user' ? 'chat-msg chat-user' : 'chat-msg chat-assistant' },
+        const body = document.createElement('div');
+        body.className = 'md-body';
+        const text = typeof m.text === 'string' ? m.text : '';
+        if (m.role === 'assistant') body.innerHTML = renderMarkdown(text) || '<em class="muted">(empty)</em>';
+        else body.textContent = text;
+        const box = el('div', { class: m.role === 'user' ? 'chat-msg chat-user' : 'chat-msg chat-assistant' },
           el('div', { class: 'chat-label-row' },
             el('div', { class: 'chat-label' }, m.role === 'user' ? 'user' : 'claude')
-          ),
-          el('div', { class: 'md-body', html: m.role === 'assistant' ? renderMarkdown(m.text) : undefined }, m.role === 'user' ? m.text : null)
+          )
         );
+        box.appendChild(body);
+        return box;
       });
       return el('div', { class: 'panel' },
         el('div', { class: 'panel-head' }, 'History'),
