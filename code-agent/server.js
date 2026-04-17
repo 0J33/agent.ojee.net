@@ -273,6 +273,12 @@ app.post('/api/sessions/:id/messages', auth, (req, res) => {
       try { listener.write(`data: ${JSON.stringify(obj)}\n\n`); } catch {}
     }
   };
+  // Keep-alive ping — silent SSE comment every 10s so proxies/browsers
+  // don't close the stream during long claude thinking / tool-use gaps.
+  const ping = setInterval(() => {
+    if (job.done) { clearInterval(ping); return; }
+    for (const listener of job.listeners) { try { listener.write(': ping\n\n'); } catch {} }
+  }, 10000);
 
   let buf = '';
   child.stdout.on('data', (chunk) => {
@@ -309,6 +315,7 @@ app.post('/api/sessions/:id/messages', auth, (req, res) => {
 
   child.on('close', (code) => {
     emit({ type: 'close', code });
+    clearInterval(ping);
     for (const listener of job.listeners) {
       try { listener.write('data: [DONE]\n\n'); listener.end(); } catch {}
     }

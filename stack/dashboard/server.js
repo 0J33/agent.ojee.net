@@ -590,7 +590,13 @@ const processChatJob = async (job, model, messages) => {
       try { listener.write(`data: ${JSON.stringify(evt)}\n\n`); } catch {}
     }
   };
+  // SSE comment heartbeat — keeps intermediate proxies (Caddy) and browsers
+  // from closing the stream during long silent gaps between tool calls.
+  const ping = setInterval(() => {
+    for (const listener of job.listeners) { try { listener.write(': ping\n\n'); } catch {} }
+  }, 10000);
   const finish = () => {
+    clearInterval(ping);
     for (const listener of job.listeners) {
       try { listener.write('data: [DONE]\n\n'); listener.end(); } catch {}
     }
