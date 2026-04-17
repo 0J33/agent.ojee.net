@@ -99,8 +99,18 @@ app.get('/api/stats', auth, async (req, res) => {
     }
     lastNet = primary; lastNetTime = now;
 
-    const rootDisk = disk.find(d => d.mount === '/') || disk[0] || {};
-    const homeDisk = disk.find(d => d.mount === '/home') || null;
+    // Read host filesystem stats via /host mount (container's si.fsSize() only
+    // sees overlay mounts, which misses /home on separate partitions).
+    const hostFs = (p) => {
+      try {
+        const s = fs.statfsSync(p);
+        const size = s.blocks * s.bsize;
+        const free = s.bavail * s.bsize;
+        return { size, used: size - free, use: size ? ((size - free) / size) * 100 : 0 };
+      } catch { return null; }
+    };
+    const rootDisk = hostFs('/host') || disk.find(d => d.mount === '/') || disk[0] || {};
+    const homeDisk = hostFs('/host/home');
     // Delta for disk I/O per second
     let readPerS = null, writePerS = null;
     if (diskIOSnap) {
@@ -137,7 +147,7 @@ app.get('/api/stats', auth, async (req, res) => {
         read_per_s: readPerS,
         write_per_s: writePerS
       },
-      home: homeDisk ? {
+      home: homeDisk && homeDisk.size !== rootDisk.size ? {
         total: homeDisk.size,
         used: homeDisk.used,
         percent: Math.round(homeDisk.use || 0)
