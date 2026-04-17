@@ -313,10 +313,13 @@ const SVG_PATHS = {
   list_models: '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
   read_file:   '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M14 2v6h6M8 13h8M8 17h8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
   list_dir:    '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>',
+  n8n:         '<circle cx="5" cy="5" r="2.5" fill="currentColor"/><circle cx="12" cy="12" r="2.5" fill="currentColor"/><circle cx="19" cy="5" r="2.5" fill="currentColor"/><circle cx="19" cy="19" r="2.5" fill="currentColor"/><path d="M7 6l4 5M17 7l-4 4M14 13l4 5" stroke="currentColor" stroke-width="1.5" fill="none"/>',
   status:      '<circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2" stroke-dasharray="12 6" stroke-linecap="round"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1.2s" repeatCount="indefinite"/></circle>'
 };
 const svgChip = (kind) => {
-  const key = SVG_PATHS[kind] ? kind : 'model';
+  // Group all n8n_* tools under the shared n8n icon
+  const resolved = kind && kind.startsWith('n8n_') ? 'n8n' : kind;
+  const key = SVG_PATHS[resolved] ? resolved : 'model';
   const wrap = el('span', { class: 'chip-icon', html: `<svg viewBox="0 0 24 24" width="12" height="12">${SVG_PATHS[key]}</svg>` });
   return wrap;
 };
@@ -327,7 +330,14 @@ const TOOL_LABELS = {
   get_services: 'Services',
   list_models: 'Models',
   read_file: 'File read',
-  list_dir: 'Directory'
+  list_dir: 'Directory',
+  n8n_list_workflows: 'List workflows',
+  n8n_get_workflow: 'Read workflow',
+  n8n_create_workflow: 'New workflow',
+  n8n_update_workflow: 'Update workflow',
+  n8n_activate_workflow: 'Activate workflow',
+  n8n_deactivate_workflow: 'Deactivate workflow',
+  n8n_quick_workflow: 'Build workflow'
 };
 const chipLabel = (kind, raw) => kind === 'tool' ? (TOOL_LABELS[raw] || raw.replace(/_/g, ' ')) : raw;
 const chip = (kind, raw, icon) => {

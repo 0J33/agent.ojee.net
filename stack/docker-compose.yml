@@ -48,6 +48,8 @@ services:
       - DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD:-change-me}
       - JWT_SECRET=${JWT_SECRET:-insecure-default-change-me}
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - N8N_BASE_URL=http://n8n:5678
+      - N8N_API_KEY=${N8N_API_KEY:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
