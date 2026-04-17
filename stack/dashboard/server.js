@@ -504,15 +504,17 @@ const runTool = async (name, args) => {
 
 const sseWrite = (res, obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
 
-app.post('/api/chat', auth, async (req, res) => {
-  const { model, messages } = req.body;
-  const ac = new AbortController();
-  res.on('close', () => { if (!res.writableFinished) ac.abort(); });
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-  const conv = [
-    { role: 'system', content: `You are an assistant on the user's self-hosted server (agent.ojee.net). You HAVE tools. You HAVE internet via web_search. Use them.
+// ─── Background chat jobs — survive tab close ────────────────────────────
+const chatJobs = new Map();
+const JOB_TTL = 10 * 60 * 1000; // keep completed jobs 10 min
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, job] of chatJobs) {
+    if (job.done && now - job.doneAt > JOB_TTL) chatJobs.delete(id);
+  }
+}, 60000);
+
+const SYSTEM_PROMPT = `You are an assistant on the user's self-hosted server (agent.ojee.net). You HAVE tools. You HAVE internet via web_search. Use them.
 
 ### HARD RULES — obey above all else
 
@@ -565,9 +567,24 @@ Q: "what's 42 squared"
 → Answer "1764" directly, no tool.
 
 Q: "make me a workflow that pings google every 10 min"
-→ n8n_quick_workflow({name:"Ping Google", trigger:"schedule", every_minutes:10, steps:[{kind:"http", url:"https://google.com"}]})` },
-    ...messages
-  ];
+→ n8n_quick_workflow({name:"Ping Google", trigger:"schedule", every_minutes:10, steps:[{kind:"http", url:"https://google.com"}]})`;
+
+const processChatJob = async (job, model, messages) => {
+  const emit = (evt) => {
+    job.events.push(evt);
+    for (const listener of job.listeners) {
+      try { listener.write(`data: ${JSON.stringify(evt)}\n\n`); } catch {}
+    }
+  };
+  const finish = () => {
+    for (const listener of job.listeners) {
+      try { listener.write('data: [DONE]\n\n'); listener.end(); } catch {}
+    }
+    job.done = true;
+    job.doneAt = Date.now();
+    job.listeners.clear();
+  };
+  const conv = [{ role: 'system', content: SYSTEM_PROMPT }, ...messages];
   const MAX_ITER = 6;
   try {
     for (let i = 0; i < MAX_ITER; i++) {
@@ -575,30 +592,25 @@ Q: "make me a workflow that pings google every 10 min"
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model, messages: conv, tools: TOOLS, stream: false }),
-        signal: ac.signal
       });
       const data = await r.json();
       const msg = data.message || {};
       let toolCalls = msg.tool_calls || [];
       let textOut = msg.content || '';
-      // Fallback: some models emit tool calls as JSON in content. Extract the
-      // first valid one, then strip ALL remaining JSON-looking blocks so the
-      // user never sees raw tool-call syntax.
       if (!toolCalls.length && textOut && textOut.includes('"name"')) {
         const extractJsonAt = (s, from) => {
           let depth = 0, end = -1, inStr = false, esc = false;
-          for (let i = from; i < s.length; i++) {
-            const c = s[i];
+          for (let idx = from; idx < s.length; idx++) {
+            const c = s[idx];
             if (esc) { esc = false; continue; }
             if (c === '\\') { esc = true; continue; }
             if (c === '"') { inStr = !inStr; continue; }
             if (inStr) continue;
             if (c === '{') depth++;
-            else if (c === '}') { depth--; if (depth === 0) { end = i; break; } }
+            else if (c === '}') { depth--; if (depth === 0) { end = idx; break; } }
           }
           return end > from ? s.slice(from, end + 1) : null;
         };
-        // Walk all {...} blocks, grab the first valid tool call
         let cursor = 0;
         while (cursor < textOut.length) {
           const start = textOut.indexOf('{', cursor);
@@ -616,35 +628,58 @@ Q: "make me a workflow that pings google every 10 min"
           cursor = start + block.length;
         }
       }
-      // If we have any tool call at all, hide ALL prose + JSON — model was
-      // often narrating ("I'll search for...") or emitting multiple JSON blobs.
-      // The real answer comes on the next iteration after tool results.
       if (toolCalls.length) textOut = '';
       conv.push({ role: 'assistant', content: textOut, tool_calls: toolCalls.length ? toolCalls : undefined });
-      if (textOut) sseWrite(res, { message: { content: textOut } });
-      if (!toolCalls.length) { res.write('data: [DONE]\n\n'); return res.end(); }
+      if (textOut) emit({ message: { content: textOut } });
+      if (!toolCalls.length) { finish(); return; }
       for (const tc of toolCalls) {
         const name = tc.function?.name;
         let args = tc.function?.arguments;
         if (typeof args === 'string') { try { args = JSON.parse(args); } catch {} }
-        sseWrite(res, { tool_call: { name, args } });
+        emit({ tool_call: { name, args } });
         let result;
         try { result = await runTool(name, args); }
         catch (e) { result = `error: ${e.message}`; }
         const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
-        sseWrite(res, { tool_result: { name, preview: resultStr.slice(0, 400) } });
+        emit({ tool_result: { name, preview: resultStr.slice(0, 400) } });
         conv.push({ role: 'tool', content: resultStr });
       }
     }
-    sseWrite(res, { message: { content: '\n\n*(max tool iterations reached)*' } });
-    res.write('data: [DONE]\n\n'); res.end();
+    emit({ message: { content: '\n\n*(max tool iterations reached)*' } });
+    finish();
   } catch (e) {
-    if (!res.writableEnded) {
-      if (e.name === 'AbortError') { res.write('data: [DONE]\n\n'); }
-      else { sseWrite(res, { message: { content: `\n\nError: ${e.message}` } }); res.write('data: [DONE]\n\n'); }
-      res.end();
-    }
+    emit({ message: { content: `\n\nError: ${e.message}` } });
+    finish();
   }
+};
+
+app.post('/api/chat', auth, async (req, res) => {
+  const { model, messages } = req.body;
+  const jobId = require('crypto').randomBytes(8).toString('hex');
+  const job = { id: jobId, events: [], done: false, doneAt: null, listeners: new Set() };
+  chatJobs.set(jobId, job);
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  sseWrite(res, { job_id: jobId });
+  job.listeners.add(res);
+  res.on('close', () => job.listeners.delete(res));
+
+  processChatJob(job, model, messages);
+});
+
+// Reconnect to a running (or recently finished) chat job
+app.get('/api/chat/jobs/:id', auth, (req, res) => {
+  const job = chatJobs.get(req.params.id);
+  if (!job) return res.status(404).json({ error: 'job not found' });
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  for (const evt of job.events) sseWrite(res, evt);
+  if (job.done) { res.write('data: [DONE]\n\n'); return res.end(); }
+  job.listeners.add(res);
+  res.on('close', () => job.listeners.delete(res));
 });
 
 // ─── Saved chats ──────────────────────────────────────────────────────────
@@ -755,6 +790,34 @@ app.delete('/api/code-agent/sessions/:id', auth, async (req, res) => {
 app.get('/api/code-agent/sessions/:id/history', auth, async (req, res) => {
   try { const r = await codeAgentReq(`/api/sessions/${req.params.id}/history`); res.status(r.status).json(await r.json()); }
   catch (e) { res.status(500).json({ error: String(e.message || e) }); }
+});
+
+// Past conversation history
+app.get('/api/code-agent/history', auth, async (req, res) => {
+  try { const r = await codeAgentReq('/api/history'); res.status(r.status).json(await r.json()); }
+  catch (e) { res.status(500).json({ error: String(e.message || e) }); }
+});
+
+app.get('/api/code-agent/history/:project/:id', auth, async (req, res) => {
+  try { const r = await codeAgentReq(`/api/history/${encodeURIComponent(req.params.project)}/${encodeURIComponent(req.params.id)}`); res.status(r.status).json(await r.json()); }
+  catch (e) { res.status(500).json({ error: String(e.message || e) }); }
+});
+
+// Reconnect to active Claude Code stream
+app.get('/api/code-agent/sessions/:id/stream', auth, async (req, res) => {
+  if (!codeAgentUp()) return res.status(503).json({ error: 'code agent not configured' });
+  try {
+    const upstream = await fetch(`${CODE_AGENT_URL}/api/sessions/${req.params.id}/stream`, {
+      headers: { Authorization: `Bearer ${CODE_AGENT_TOKEN}` }
+    });
+    if (upstream.status === 404) return res.status(404).json({ error: 'no active stream' });
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    upstream.body.on('data', chunk => res.write(chunk));
+    upstream.body.on('end', () => res.end());
+    upstream.body.on('error', () => res.end());
+  } catch (e) { res.status(502).json({ error: String(e.message || e) }); }
 });
 
 // Message endpoint: stream SSE from loq through to our client.

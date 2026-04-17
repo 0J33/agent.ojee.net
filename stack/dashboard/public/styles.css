@@ -221,7 +221,12 @@ button { cursor: pointer; }
   content: attr(data-lang); position: absolute; top: 2px; right: 6px;
   font-size: 0.55rem; color: var(--text-dimmer); text-transform: uppercase; letter-spacing: 1px;
 }
-.md-body .md-code code { color: #ddd; font-family: inherit; white-space: pre; }
+.md-body .md-code code { color: #ddd; font-family: inherit; white-space: pre; display: block; }
+
+/* Constrain code blocks + embeds to parent width */
+.chat-msg { min-width: 0; overflow: hidden; }
+.chat-msg .md-body { min-width: 0; overflow: hidden; }
+.chat-msg .md-body .md-code { max-width: 100%; overflow-x: auto; }
 
 /* ─── Scrollbars ─── */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
@@ -261,6 +266,13 @@ button { cursor: pointer; }
   .chat-input { min-height: 40px; padding: 10px 12px; font-size: 16px; line-height: 1.4; }
   .chat-send { min-height: 40px; }
 }
+
+/* Claude Code history */
+.ca-hist-list { display: flex; flex-direction: column; gap: 2px; max-height: 60vh; overflow-y: auto; margin-top: 8px; }
+.ca-hist-list .saved-item { flex-direction: column; align-items: flex-start; gap: 2px; }
+.ca-hist-title { font-weight: 700; color: var(--accent); font-size: 0.75rem; margin: 8px 0 4px; word-break: break-word; }
+.ca-hist-meta { font-size: 0.6rem; color: var(--text-dimmer); margin-bottom: 8px; }
+.ca-hist-date { font-size: 0.58rem; color: var(--text-dimmer); }
 
 @media screen and (max-width: 380px) {
   .header-right { gap: 6px; }

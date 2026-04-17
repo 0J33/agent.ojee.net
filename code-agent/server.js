@@ -119,7 +119,80 @@ app.get('/api/sessions/:id/history', auth, (req, res) => {
   } catch (e) { res.status(500).json({ error: String(e.message || e) }); }
 });
 
+// ─── Past conversation history (browse all projects) ────────────────────
+app.get('/api/history', auth, (req, res) => {
+  const claudeDir = path.join(HOME, '.claude', 'projects');
+  if (!safeExists(claudeDir)) return res.json({ conversations: [] });
+  try {
+    const conversations = [];
+    const projDirs = fs.readdirSync(claudeDir, { withFileTypes: true }).filter(d => d.isDirectory());
+    for (const proj of projDirs) {
+      const projPath = path.join(claudeDir, proj.name);
+      const files = fs.readdirSync(projPath).filter(f => f.endsWith('.jsonl'));
+      for (const file of files) {
+        const filePath = path.join(projPath, file);
+        try {
+          const stat = fs.statSync(filePath);
+          const lines = fs.readFileSync(filePath, 'utf8').trim().split('\n').filter(Boolean);
+          let firstUserMsg = '';
+          for (const line of lines) {
+            try {
+              const evt = JSON.parse(line);
+              if (evt.type === 'user' && evt.message?.content) {
+                const text = typeof evt.message.content === 'string' ? evt.message.content
+                  : Array.isArray(evt.message.content) ? evt.message.content.filter(c => c.type === 'text').map(c => c.text).join(' ') : '';
+                if (text) { firstUserMsg = text.slice(0, 100); break; }
+              }
+            } catch {}
+          }
+          conversations.push({
+            id: file.replace('.jsonl', ''),
+            project: proj.name,
+            title: firstUserMsg || file.replace('.jsonl', ''),
+            modified: stat.mtimeMs,
+            messageCount: lines.length,
+          });
+        } catch {}
+      }
+    }
+    conversations.sort((a, b) => b.modified - a.modified);
+    res.json({ conversations: conversations.slice(0, 50) });
+  } catch (e) { res.status(500).json({ error: String(e.message || e) }); }
+});
+
+// Load a specific past conversation by project + id
+app.get('/api/history/:project/:id', auth, (req, res) => {
+  const filePath = path.join(HOME, '.claude', 'projects', req.params.project, `${req.params.id}.jsonl`);
+  if (!safeExists(filePath)) return res.status(404).json({ error: 'not found' });
+  try {
+    const lines = fs.readFileSync(filePath, 'utf8').trim().split('\n').filter(Boolean);
+    const messages = [];
+    for (const line of lines) {
+      try {
+        const evt = JSON.parse(line);
+        if (evt.type === 'user' && evt.message?.content) {
+          const text = typeof evt.message.content === 'string' ? evt.message.content
+            : Array.isArray(evt.message.content) ? evt.message.content.filter(c => c.type === 'text').map(c => c.text).join('\n') : '';
+          if (text) messages.push({ role: 'user', text });
+        } else if (evt.type === 'assistant' && evt.message?.content) {
+          const content = Array.isArray(evt.message.content) ? evt.message.content : [];
+          for (const c of content) {
+            if (c.type === 'text' && c.text) messages.push({ role: 'assistant', text: c.text });
+            else if (c.type === 'tool_use') messages.push({ role: 'tool_use', tool: c.name, input: c.input });
+          }
+        }
+      } catch {}
+    }
+    res.json({ messages });
+  } catch (e) { res.status(500).json({ error: String(e.message || e) }); }
+});
+
 // ─── Send message → stream Claude's response as SSE ────────────────────
+// Child process runs independently of the HTTP connection. If the client
+// disconnects, the process keeps running and buffers events so the client
+// can reconnect via GET /api/sessions/:id/stream.
+const activeChildren = new Map(); // sessionId → { child, events[], done, listeners }
+
 app.post('/api/sessions/:id/messages', auth, (req, res) => {
   const s = sessions.get(req.params.id);
   if (!s) return res.status(404).json({ error: 'session not found' });
@@ -150,7 +223,17 @@ app.post('/api/sessions/:id/messages', auth, (req, res) => {
   s.initialized = true;
   s.lastActivityAt = Date.now();
 
-  const sseWrite = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+  // Background job state
+  const job = { child, events: [], done: false, listeners: new Set() };
+  activeChildren.set(s.id, job);
+
+  const emit = (obj) => {
+    job.events.push(obj);
+    for (const listener of job.listeners) {
+      try { listener.write(`data: ${JSON.stringify(obj)}\n\n`); } catch {}
+    }
+  };
+
   let buf = '';
   child.stdout.on('data', (chunk) => {
     buf += chunk.toString();
@@ -160,43 +243,57 @@ app.post('/api/sessions/:id/messages', auth, (req, res) => {
       if (!line.trim()) continue;
       try {
         const evt = JSON.parse(line);
-        // Forward a simplified event stream to the client
         if (evt.type === 'system' && evt.subtype === 'init') {
-          sseWrite({ type: 'init', model: evt.model, tools: evt.tools });
+          emit({ type: 'init', model: evt.model, tools: evt.tools });
         } else if (evt.type === 'assistant') {
           const content = evt.message?.content || [];
           for (const c of content) {
-            if (c.type === 'text' && c.text) sseWrite({ type: 'text', text: c.text });
-            else if (c.type === 'tool_use') sseWrite({ type: 'tool_use', tool: c.name, input: c.input });
+            if (c.type === 'text' && c.text) emit({ type: 'text', text: c.text });
+            else if (c.type === 'tool_use') emit({ type: 'tool_use', tool: c.name, input: c.input });
           }
         } else if (evt.type === 'user' && evt.message?.content) {
-          // Tool results
           const content = Array.isArray(evt.message.content) ? evt.message.content : [];
           for (const c of content) {
-            if (c.type === 'tool_result') sseWrite({ type: 'tool_result', content: typeof c.content === 'string' ? c.content.slice(0, 500) : '' });
+            if (c.type === 'tool_result') emit({ type: 'tool_result', content: typeof c.content === 'string' ? c.content.slice(0, 500) : '' });
           }
         } else if (evt.type === 'result') {
-          sseWrite({ type: 'result', cost_usd: evt.total_cost_usd, duration_ms: evt.duration_ms, is_error: evt.is_error });
+          emit({ type: 'result', cost_usd: evt.total_cost_usd, duration_ms: evt.duration_ms, is_error: evt.is_error });
         }
-      } catch {
-        // Non-JSON line; ignore
-      }
+      } catch {}
     }
   });
 
   child.stderr.on('data', (chunk) => {
-    // Forward stderr as a debug event (optional)
-    sseWrite({ type: 'stderr', text: chunk.toString().slice(0, 500) });
+    emit({ type: 'stderr', text: chunk.toString().slice(0, 500) });
   });
 
   child.on('close', (code) => {
-    sseWrite({ type: 'close', code });
-    res.write('data: [DONE]\n\n');
-    res.end();
+    emit({ type: 'close', code });
+    for (const listener of job.listeners) {
+      try { listener.write('data: [DONE]\n\n'); listener.end(); } catch {}
+    }
+    job.done = true;
+    job.listeners.clear();
+    // Clean up after 5 min
+    setTimeout(() => { if (activeChildren.get(s.id) === job) activeChildren.delete(s.id); }, 300000);
   });
 
-  // Abort child if client disconnects
-  res.on('close', () => { if (!res.writableFinished) child.kill('SIGTERM'); });
+  // Register this response as a listener (do NOT kill child on disconnect)
+  job.listeners.add(res);
+  res.on('close', () => job.listeners.delete(res));
+});
+
+// Reconnect to a running Claude Code session stream
+app.get('/api/sessions/:id/stream', auth, (req, res) => {
+  const job = activeChildren.get(req.params.id);
+  if (!job) return res.status(404).json({ error: 'no active stream' });
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  for (const evt of job.events) res.write(`data: ${JSON.stringify(evt)}\n\n`);
+  if (job.done) { res.write('data: [DONE]\n\n'); return res.end(); }
+  job.listeners.add(res);
+  res.on('close', () => job.listeners.delete(res));
 });
 
 app.listen(PORT, BIND, () => {

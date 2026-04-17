@@ -58,52 +58,42 @@ const escapeHtml = (s) => s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>
 
 function renderMarkdown(text) {
   if (!text) return '';
-  // Extract code blocks first to protect them from other replacements
   const blocks = [];
   let src = text.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
     blocks.push({ lang, code: code.replace(/\n$/, '') });
     return `\u0000CODEBLOCK${blocks.length - 1}\u0000`;
   });
   src = escapeHtml(src);
-  // Inline code (after escape, so HTML inside is already escaped)
   src = src.replace(/`([^`\n]+)`/g, '<code class="md-ic">$1</code>');
-  // Headings
   src = src.replace(/^######\s+(.+)$/gm, '<h6>$1</h6>')
            .replace(/^#####\s+(.+)$/gm, '<h5>$1</h5>')
            .replace(/^####\s+(.+)$/gm, '<h4>$1</h4>')
            .replace(/^###\s+(.+)$/gm, '<h3>$1</h3>')
            .replace(/^##\s+(.+)$/gm, '<h2>$1</h2>')
            .replace(/^#\s+(.+)$/gm, '<h1>$1</h1>');
-  // Bold / italic
   src = src.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
            .replace(/(^|\s)\*([^*\n]+)\*/g, '$1<em>$2</em>')
            .replace(/(^|\s)_([^_\n]+)_/g, '$1<em>$2</em>');
-  // Links [text](url)
   src = src.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_, text, url) => {
     const safe = /^(https?:|mailto:|\/)/.test(url) ? url : '#';
     return `<a href="${safe}" target="_blank" rel="noopener noreferrer">${text}</a>`;
   });
-  // Bullet lists
   src = src.replace(/(?:^[ \t]*[-*]\s+.+(?:\n|$))+/gm, block => {
     const items = block.trim().split(/\n/).map(l => `<li>${l.replace(/^[ \t]*[-*]\s+/, '')}</li>`).join('');
     return `<ul class="md-ul">${items}</ul>`;
   });
-  // Numbered lists
   src = src.replace(/(?:^[ \t]*\d+\.\s+.+(?:\n|$))+/gm, block => {
     const items = block.trim().split(/\n/).map(l => `<li>${l.replace(/^[ \t]*\d+\.\s+/, '')}</li>`).join('');
     return `<ol class="md-ol">${items}</ol>`;
   });
-  // Blockquote
   src = src.replace(/(?:^&gt;\s+.+(?:\n|$))+/gm, block => {
     const body = block.trim().split(/\n/).map(l => l.replace(/^&gt;\s+/, '')).join('<br>');
     return `<blockquote class="md-bq">${body}</blockquote>`;
   });
-  // Paragraphs (double newline)
   src = src.split(/\n{2,}/).map(p => {
     if (/^<(h\d|ul|ol|pre|blockquote|p)/.test(p.trim())) return p;
     return `<p>${p.trim().replace(/\n/g, '<br>')}</p>`;
   }).join('');
-  // Restore code blocks
   src = src.replace(/\u0000CODEBLOCK(\d+)\u0000/g, (_, i) => {
     const b = blocks[+i];
     const escCode = escapeHtml(b.code);
@@ -161,9 +151,45 @@ let state = {
   stats: null, services: null, models: [], pull: [],
   chat: [], chatModel: '', chatBusy: false, chatStatus: null,
   savedChats: [], activeChatId: null, chatDirty: false, showSavedList: false,
+  chatJobId: null, chatStartTs: null,
   actionMsg: '',
   codeAgent: { enabled: false, sessions: [], active: null, messages: [], busy: false, status: null, abort: null,
-    pickerOpen: false, pickerPath: '/media/ojee/NVME/Code/[GIT]/Claude', pickerEntries: [], pickerParent: null },
+    pickerOpen: false, pickerPath: '/media/ojee/NVME/Code/[GIT]/Claude', pickerEntries: [], pickerParent: null,
+    historyOpen: false, historyList: [], historyView: null, historyMessages: [] },
+};
+
+// ─── localStorage persistence ───────────────────────────────────────────
+const persistChat = () => {
+  try {
+    localStorage.setItem('chat_state', JSON.stringify({
+      chat: state.chat,
+      chatModel: state.chatModel,
+      activeChatId: state.activeChatId,
+      chatDirty: state.chatDirty,
+      chatJobId: state.chatJobId,
+      chatBusy: state.chatBusy,
+      chatStartTs: state.chatStartTs,
+    }));
+  } catch {}
+};
+
+const restoreChat = () => {
+  try {
+    const saved = JSON.parse(localStorage.getItem('chat_state'));
+    if (saved && saved.chat && saved.chat.length) {
+      state.chat = saved.chat;
+      state.chatModel = saved.chatModel || '';
+      state.activeChatId = saved.activeChatId || null;
+      state.chatDirty = saved.chatDirty || false;
+      state.chatJobId = saved.chatJobId || null;
+      // If was busy, try to reconnect
+      if (saved.chatBusy && saved.chatJobId) {
+        state.chatBusy = true;
+        state.chatStartTs = saved.chatStartTs || null;
+        state.chatStatus = 'reconnecting';
+      }
+    }
+  } catch {}
 };
 
 window.addEventListener('hashchange', () => {
@@ -212,28 +238,28 @@ const bar = (label, pct) => {
 
 const panelSystem = () => {
   const s = state.stats;
-  if (!s) return el('div', { class: 'panel' }, el('div', { class: 'panel-head' }, 'System'), el('div', { class: 'muted' }, 'loading…'));
+  if (!s) return el('div', { class: 'panel' }, el('div', { class: 'panel-head' }, 'System'), el('div', { class: 'muted' }, 'loading\u2026'));
   const cpuTemp = (s.temps || []).find(t => t.label === 'CPU Package');
   const g = s.gpu;
   const d = s.disk;
   const diskIO = (d.read_per_s != null || d.write_per_s != null)
-    ? `↑${fmt(d.write_per_s || 0)}/s ↓${fmt(d.read_per_s || 0)}/s` : null;
+    ? `\u2191${fmt(d.write_per_s || 0)}/s \u2193${fmt(d.read_per_s || 0)}/s` : null;
   return el('div', { class: 'panel' },
     el('div', { class: 'panel-head' }, 'System'),
     statRow('Uptime', fmtUp(s.uptime)),
     statRow('OS', s.os),
     statRow('CPU', s.cpu.model),
-    statRow('CPU Load', `${s.cpu.physical}c/${s.cpu.cores}t — ${s.cpu.avg.toFixed(0)}%`),
-    cpuTemp ? statRow('CPU Temp', `${cpuTemp.current}°C`, cpuTemp.current > 80) : null,
+    statRow('CPU Load', `${s.cpu.physical}c/${s.cpu.cores}t \u2014 ${s.cpu.avg.toFixed(0)}%`),
+    cpuTemp ? statRow('CPU Temp', `${cpuTemp.current}\u00B0C`, cpuTemp.current > 80) : null,
     g ? statRow('GPU', `${g.vendor ? g.vendor + ' ' : ''}${g.model}`) : null,
-    g && g.util != null ? statRow('GPU Load', `${g.util}%${g.vram_mb ? ` · ${(g.vram_mb / 1024).toFixed(1)} GB VRAM` : ''}`) : null,
-    g && g.temp != null ? statRow('GPU Temp', `${g.temp}°C`, g.temp > 85) : null,
+    g && g.util != null ? statRow('GPU Load', `${g.util}%${g.vram_mb ? ` \u00B7 ${(g.vram_mb / 1024).toFixed(1)} GB VRAM` : ''}`) : null,
+    g && g.temp != null ? statRow('GPU Temp', `${g.temp}\u00B0C`, g.temp > 85) : null,
     statRow('RAM', `${fmt(s.memory.used)} / ${fmt(s.memory.total)} (${s.memory.percent}%)`),
     statRow('Swap', `${fmt(s.swap.used)} / ${fmt(s.swap.total)}`),
     statRow('Disk /', `${fmt(s.disk.used)} / ${fmt(s.disk.total)} (${s.disk.percent}%)`),
     s.home ? statRow('Disk /home', `${fmt(s.home.used)} / ${fmt(s.home.total)} (${s.home.percent}%)`) : null,
     diskIO ? statRow('Disk I/O', diskIO) : null,
-    statRow('Network', `↑${fmt(s.network.sent_per_s)}/s ↓${fmt(s.network.recv_per_s)}/s`),
+    statRow('Network', `\u2191${fmt(s.network.sent_per_s)}/s \u2193${fmt(s.network.recv_per_s)}/s`),
     ...bar('CPU', s.cpu.avg),
     g && g.util != null ? bar('GPU', g.util) : [],
     ...bar('RAM', s.memory.percent),
@@ -259,7 +285,7 @@ const panelServices = () => {
 };
 
 const doAction = async (action) => {
-  state.actionMsg = `Running ${action}…`; render();
+  state.actionMsg = `Running ${action}\u2026`; render();
   const d = await api('/api/action', { method: 'POST', body: JSON.stringify({ action }) });
   state.actionMsg = d?.ok ? `${action}: OK` : `${action}: ${d?.stderr || d?.error || 'failed'}`;
   render();
@@ -281,8 +307,8 @@ const panelActions = () => {
     el('div', { class: 'panel-head sub' }, 'Model Pull Progress'),
     el('div', { class: 'pull-box' }, (state.pull || []).join('\n') || 'no active pull'),
     el('div', { class: 'panel-head sub' }, 'Quick Links'),
-    el('a', { class: 'link-btn', href: 'https://chat.agent.ojee.net', target: '_blank' }, 'Open WebUI →', el('div', { class: 'link-sub' }, 'Full chat interface (with RAG)')),
-    el('a', { class: 'link-btn', href: 'https://flow.agent.ojee.net', target: '_blank' }, 'n8n →', el('div', { class: 'link-sub' }, 'Workflow automation'))
+    el('a', { class: 'link-btn', href: 'https://chat.agent.ojee.net', target: '_blank' }, 'Open WebUI \u2192', el('div', { class: 'link-sub' }, 'Full chat interface (with RAG)')),
+    el('a', { class: 'link-btn', href: 'https://flow.agent.ojee.net', target: '_blank' }, 'n8n \u2192', el('div', { class: 'link-sub' }, 'Workflow automation'))
   );
 };
 
@@ -292,6 +318,9 @@ const newChat = () => {
   state.activeChatId = null;
   state.chatDirty = false;
   state.chatStatus = null;
+  state.chatJobId = null;
+  state.chatStartTs = null;
+  persistChat();
   render();
 };
 
@@ -312,6 +341,7 @@ const saveChat = async () => {
   state.activeChatId = id;
   state.chatDirty = false;
   await loadSavedChats();
+  persistChat();
   render();
 };
 
@@ -326,6 +356,7 @@ const loadChat = async (id) => {
   state.chatModel = chat.model || state.chatModel;
   state.chatDirty = false;
   state.showSavedList = false;
+  persistChat();
   render();
 };
 
@@ -338,6 +369,7 @@ const deleteChat = async (id, e) => {
     state.activeChatId = null;
   }
   await loadSavedChats();
+  persistChat();
   render();
 };
 
@@ -348,10 +380,9 @@ const loadSavedChats = async () => {
 
 // ─── Chat panel ─────────────────────────────────────────────────────────
 const typingDots = () => el('span', { class: 'typing-dots' },
-  el('span', {}, '●'), el('span', {}, '●'), el('span', {}, '●')
+  el('span', {}, '\u25CF'), el('span', {}, '\u25CF'), el('span', {}, '\u25CF')
 );
 
-// Inline SVG paths keyed by chip kind (all 14x14, currentColor stroke/fill).
 const SVG_PATHS = {
   model:       '<path fill="currentColor" d="M9 3h6v2h2a2 2 0 0 1 2 2v2h2v2h-2v2h2v2h-2v2a2 2 0 0 1-2 2h-2v2H9v-2H7a2 2 0 0 1-2-2v-2H3v-2h2v-2H3v-2h2V7a2 2 0 0 1 2-2h2V3zm0 6v6h6V9H9z"/>',
   web_search:  '<circle cx="10" cy="10" r="5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M14 14l5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>',
@@ -365,7 +396,6 @@ const SVG_PATHS = {
   status:      '<circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2" stroke-dasharray="12 6" stroke-linecap="round"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1.2s" repeatCount="indefinite"/></circle>'
 };
 const svgChip = (kind) => {
-  // Group all n8n_* tools under the shared n8n icon
   const resolved = kind && kind.startsWith('n8n_') ? 'n8n' : kind;
   const key = SVG_PATHS[resolved] ? resolved : 'model';
   const wrap = el('span', { class: 'chip-icon', html: `<svg viewBox="0 0 24 24" width="12" height="12">${SVG_PATHS[key]}</svg>` });
@@ -399,7 +429,7 @@ const panelChat = () => {
   const lastIdx = state.chat.length - 1;
 
   const logChildren = state.chat.length === 0
-    ? [el('div', { class: 'chat-empty' }, 'Ask anything…')]
+    ? [el('div', { class: 'chat-empty' }, 'Ask anything\u2026')]
     : state.chat.map((m, i) => {
       const isLast = i === lastIdx;
       const streaming = isLast && m.role === 'assistant' && state.chatBusy;
@@ -409,7 +439,7 @@ const panelChat = () => {
       } else if (m.role === 'assistant') {
         bodyEl.innerHTML = renderMarkdown(m.content);
         if (streaming) {
-          const cursor = el('span', { class: 'typing-cursor' }, '▍');
+          const cursor = el('span', { class: 'typing-cursor' }, '\u258D');
           bodyEl.appendChild(cursor);
         }
       } else {
@@ -431,22 +461,31 @@ const panelChat = () => {
       const statusText = !streaming ? null
         : (state.chatStatus && state.chatStatus.startsWith('searching') ? state.chatStatus
         : (m.content ? 'typing' : 'thinking'));
+
+      // Live timer: show elapsed time always (counting up while streaming)
+      const elapsed = streaming && state.chatStartTs
+        ? Date.now() - state.chatStartTs
+        : m.elapsed_ms;
+      const timeStr = m.ts ? fmtTime(m.ts) : '';
+      const durStr = elapsed != null ? fmtDur(elapsed) : '';
+      const timeDisplay = timeStr + (durStr ? ' \u00B7 ' + durStr : '');
+
       const chipRow = el('div', { class: 'chat-chips' },
         model ? chip('model', model, svgChip('model')) : null,
         ...toolList.map(t => chip('tool', t, svgChip(t))),
-        statusText ? chip('status', statusText + '…', svgChip('status')) : null,
-        m.ts && !streaming ? el('span', { class: 'chat-time' }, fmtTime(m.ts) + (m.elapsed_ms ? ' · ' + fmtDur(m.elapsed_ms) : '')) : null
+        statusText ? chip('status', statusText + '\u2026', svgChip('status')) : null,
+        // Always show time/duration (live timer element for streaming)
+        timeDisplay ? el('span', { class: 'chat-time' + (streaming ? ' live-timer' : ''), 'data-start': streaming ? state.chatStartTs : '' }, timeDisplay) : null
       );
       return el('div', { class: 'chat-msg chat-assistant' }, chipRow, bodyEl);
     });
 
   const log = el('div', { class: 'chat-log' }, ...logChildren);
 
-  const input = el('textarea', { class: 'chat-input', rows: '1', placeholder: state.chatModel ? 'Ask anything…' : 'Pull a model first' });
+  const input = el('textarea', { class: 'chat-input', rows: '1', placeholder: state.chatModel ? 'Ask anything\u2026' : 'Pull a model first' });
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
   });
-  // Auto-grow textarea
   input.addEventListener('input', () => {
     input.style.height = 'auto';
     input.style.height = Math.min(input.scrollHeight, 160) + 'px';
@@ -457,15 +496,15 @@ const panelChat = () => {
     if (!text || state.chatBusy || !state.chatModel) return;
     const now = Date.now();
     state.chat.push({ role: 'user', content: text, ts: now });
-    state.chat.push({ role: 'assistant', content: '', model: state.chatModel, tools: [], ts: now, elapsed_ms: null });
+    state.chat.push({ role: 'assistant', content: '', model: state.chatModel, tools: [], ts: null, elapsed_ms: null });
     state.chatBusy = true;
     state.chatStatus = 'thinking';
     state.chatDirty = true;
+    state.chatStartTs = now;
     input.value = '';
+    persistChat();
     render();
 
-    const ac = new AbortController();
-    state.chatAbort = ac;
     try {
       const r = await fetch('/api/chat', {
         method: 'POST',
@@ -474,7 +513,6 @@ const panelChat = () => {
           model: state.chatModel,
           messages: state.chat.slice(0, -1).map(m => ({ role: m.role, content: m.content }))
         }),
-        signal: ac.signal
       });
       const reader = r.body.getReader();
       const dec = new TextDecoder();
@@ -491,12 +529,15 @@ const panelChat = () => {
           if (payload === '[DONE]') continue;
           try {
             const j = JSON.parse(payload);
-            if (j.message?.content) {
+            if (j.job_id) {
+              state.chatJobId = j.job_id;
+              persistChat();
+            } else if (j.message?.content) {
               if (state.chatStatus !== 'typing') state.chatStatus = 'typing';
               state.chat[state.chat.length - 1].content += j.message.content;
               render();
             } else if (j.tool_call) {
-              state.chatStatus = `searching · ${j.tool_call.name.replace(/^(get|list|read|web)_/, '')}`;
+              state.chatStatus = `searching \u00B7 ${j.tool_call.name.replace(/^(get|list|read|web)_/, '')}`;
               const last = state.chat[state.chat.length - 1];
               if (!last.tools) last.tools = [];
               if (!last.tools.includes(j.tool_call.name)) last.tools.push(j.tool_call.name);
@@ -519,17 +560,23 @@ const panelChat = () => {
         state.chat[state.chat.length - 1].content = `Error: ${e.message}`;
       }
     }
+    // Set timestamp to NOW (completion time) and compute elapsed
     const last = state.chat[state.chat.length - 1];
-    if (last && last.role === 'assistant' && last.ts && last.elapsed_ms == null) last.elapsed_ms = Date.now() - last.ts;
-    state.chatAbort = null;
+    if (last && last.role === 'assistant') {
+      last.ts = Date.now();
+      last.elapsed_ms = state.chatStartTs ? Date.now() - state.chatStartTs : null;
+    }
+    state.chatJobId = null;
     state.chatBusy = false;
     state.chatStatus = null;
+    state.chatStartTs = null;
+    persistChat();
     render();
   };
 
   const stop = () => { state.chatAbort?.abort(); };
 
-  const modelSel = el('select', { class: 'chat-select', onchange: (e) => { state.chatModel = e.target.value; render(); } },
+  const modelSel = el('select', { class: 'chat-select', onchange: (e) => { state.chatModel = e.target.value; persistChat(); render(); } },
     ...(state.models.length ? state.models : [{ name: 'no models' }]).map(m =>
       el('option', { value: m.name, ...(m.name === state.chatModel ? { selected: true } : {}) }, m.name)
     )
@@ -537,7 +584,7 @@ const panelChat = () => {
 
   const toolbar = el('div', { class: 'chat-toolbar' },
     el('button', { class: 'btn sm', onclick: newChat, title: 'New chat' }, '+ New'),
-    el('button', { class: 'btn sm', onclick: saveChat, title: 'Save this chat', disabled: state.chat.length === 0 }, state.activeChatId ? 'Update' : 'Save'),
+    el('button', { class: 'btn sm', onclick: saveChat, title: 'Save this chat', disabled: state.chat.length === 0 }, 'Save'),
     el('button', { class: 'btn sm', onclick: clearChat, title: 'Clear current chat', disabled: state.chat.length === 0 }, 'Clear'),
     el('button', { class: 'btn sm', onclick: () => { state.showSavedList = !state.showSavedList; render(); }, title: 'Show saved chats' },
       `Saved (${state.savedChats.length})`)
@@ -550,14 +597,14 @@ const panelChat = () => {
           : state.savedChats.map(c =>
               el('div', { class: 'saved-item' + (c.id === state.activeChatId ? ' active' : ''), onclick: () => loadChat(c.id) },
                 el('div', { class: 'saved-title' }, c.title),
-                el('button', { class: 'saved-del', onclick: (e) => deleteChat(c.id, e), title: 'Delete' }, '×')
+                el('button', { class: 'saved-del', onclick: (e) => deleteChat(c.id, e), title: 'Delete' }, '\u00D7')
               )
             )
       )
     : null;
 
   const activeIndicator = state.activeChatId
-    ? el('div', { class: 'chat-active-badge' }, `editing: ${(state.savedChats.find(c => c.id === state.activeChatId) || {}).title || '—'}`)
+    ? el('div', { class: 'chat-active-badge' }, `editing: ${(state.savedChats.find(c => c.id === state.activeChatId) || {}).title || '\u2014'}`)
     : null;
 
   return el('div', { class: 'panel chat-panel' },
@@ -626,21 +673,19 @@ const caClose = async (id, e) => {
 };
 
 const caSend = async (text) => {
-  if (!state.codeAgent.active || !text.trim() || state.codeAgent.busy) return;
+  if (!state.codeAgent.active || !text.trim()) return;
+  // Allow sending even while busy (message will queue on the server)
   const now = Date.now();
   state.codeAgent.messages.push({ role: 'user', text, ts: now });
   state.codeAgent.messages.push({ role: 'assistant', text: '', ts: now, elapsed_ms: null });
   state.codeAgent.busy = true;
   state.codeAgent.status = 'thinking';
   render();
-  const ac = new AbortController();
-  state.codeAgent.abort = ac;
   try {
     const r = await fetch(`/api/code-agent/sessions/${state.codeAgent.active}/messages`, {
       method: 'POST',
       headers: { ...headers(), 'Content-Type': 'application/json' },
       body: JSON.stringify({ content: text }),
-      signal: ac.signal
     });
     const reader = r.body.getReader();
     const dec = new TextDecoder();
@@ -671,11 +716,9 @@ const caSend = async (text) => {
       if (last) last.text = (last.text || '') + `\n\nError: ${e.message}`;
     }
   }
-  // Drop trailing empty assistant messages
   while (state.codeAgent.messages.length && state.codeAgent.messages[state.codeAgent.messages.length - 1].role === 'assistant' && !state.codeAgent.messages[state.codeAgent.messages.length - 1].text) {
     state.codeAgent.messages.pop();
   }
-  // Stamp elapsed time on the last assistant message with a pending timer
   for (let i = state.codeAgent.messages.length - 1; i >= 0; i--) {
     const m = state.codeAgent.messages[i];
     if (m.role === 'assistant' && m.ts && m.elapsed_ms == null) { m.elapsed_ms = Date.now() - m.ts; break; }
@@ -683,6 +726,26 @@ const caSend = async (text) => {
   state.codeAgent.busy = false;
   state.codeAgent.status = null;
   state.codeAgent.abort = null;
+  render();
+};
+
+// ─── Claude Code history browser ─────────────────────────────────────
+const caLoadHistory = async () => {
+  state.codeAgent.historyOpen = true;
+  state.codeAgent.historyView = null;
+  state.codeAgent.historyMessages = [];
+  render();
+  const data = await api('/api/code-agent/history');
+  state.codeAgent.historyList = data?.conversations || [];
+  render();
+};
+
+const caViewHistory = async (conv) => {
+  state.codeAgent.historyView = conv;
+  state.codeAgent.historyMessages = [];
+  render();
+  const data = await api(`/api/code-agent/history/${encodeURIComponent(conv.project)}/${encodeURIComponent(conv.id)}`);
+  state.codeAgent.historyMessages = data?.messages || [];
   render();
 };
 
@@ -712,6 +775,49 @@ const panelCodeAgent = () => {
     );
   }
 
+  // History browser
+  if (ca.historyOpen) {
+    if (ca.historyView) {
+      // Viewing a specific past conversation
+      const msgs = ca.historyMessages.map(m => {
+        if (m.role === 'tool_use') {
+          const input = typeof m.input === 'object' ? JSON.stringify(m.input).slice(0, 120) : String(m.input || '').slice(0, 120);
+          return el('div', { class: 'ca-tool' }, svgChip('list_models'), el('span', {}, `${m.tool}(${input})`));
+        }
+        return el('div', { class: m.role === 'user' ? 'chat-msg chat-user' : 'chat-msg chat-assistant' },
+          el('div', { class: 'chat-label-row' },
+            el('div', { class: 'chat-label' }, m.role === 'user' ? 'user' : 'claude')
+          ),
+          el('div', { class: 'md-body', html: m.role === 'assistant' ? renderMarkdown(m.text) : undefined }, m.role === 'user' ? m.text : null)
+        );
+      });
+      return el('div', { class: 'panel' },
+        el('div', { class: 'panel-head' }, 'History'),
+        el('button', { class: 'btn sm', onclick: () => { ca.historyView = null; ca.historyMessages = []; render(); } }, '\u2190 Back'),
+        el('div', { class: 'ca-hist-title' }, ca.historyView.title),
+        el('div', { class: 'ca-hist-meta' }, `Project: ${ca.historyView.project} \u00B7 ${ca.historyView.messageCount} events`),
+        el('div', { class: 'chat-wrap' },
+          el('div', { class: 'chat-log' }, ...msgs)
+        )
+      );
+    }
+    // History list
+    return el('div', { class: 'panel' },
+      el('div', { class: 'panel-head' }, 'Past Conversations'),
+      el('button', { class: 'btn sm', onclick: () => { ca.historyOpen = false; render(); } }, '\u2190 Back'),
+      ca.historyList.length === 0
+        ? el('div', { class: 'muted small' }, 'no past conversations found')
+        : el('div', { class: 'ca-hist-list' },
+            ...ca.historyList.map(conv =>
+              el('div', { class: 'saved-item', onclick: () => caViewHistory(conv) },
+                el('div', { class: 'saved-title' }, conv.title),
+                el('div', { class: 'ca-hist-date' }, fmtTime(conv.modified))
+              )
+            )
+          )
+    );
+  }
+
   // Session chat view
   const msgs = ca.messages.map((m, i) => {
     if (m.role === 'tool_use') {
@@ -721,7 +827,7 @@ const panelCodeAgent = () => {
     const isLast = i === ca.messages.length - 1;
     const streaming = isLast && m.role === 'assistant' && ca.busy;
     const timeChip = m.ts && !streaming
-      ? el('span', { class: 'chat-time' }, fmtTime(m.ts) + (m.elapsed_ms ? ' · ' + fmtDur(m.elapsed_ms) : ''))
+      ? el('span', { class: 'chat-time' }, fmtTime(m.ts) + (m.elapsed_ms ? ' \u00B7 ' + fmtDur(m.elapsed_ms) : ''))
       : null;
     return el('div', { class: m.role === 'user' ? 'chat-msg chat-user' : 'chat-msg chat-assistant' },
       el('div', { class: 'chat-label-row' },
@@ -732,7 +838,7 @@ const panelCodeAgent = () => {
     );
   });
 
-  const input = el('textarea', { class: 'chat-input', rows: '1', placeholder: activeSession ? 'message Claude…' : 'pick a session' });
+  const input = el('textarea', { class: 'chat-input', rows: '1', placeholder: activeSession ? 'message Claude\u2026' : 'pick a session' });
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -746,7 +852,7 @@ const panelCodeAgent = () => {
     el('div', { class: 'ca-sess' + (s.id === ca.active ? ' active' : ''), onclick: () => caSelect(s.id) },
       el('span', { class: 'ca-sess-title' }, s.title),
       el('span', { class: 'ca-sess-cwd' }, s.cwd.replace(/^\/media\/ojee\/NVME\/Code\/\[GIT\]\//, '')),
-      el('button', { class: 'ca-sess-del', onclick: (e) => caClose(s.id, e), title: 'Close' }, '×')
+      el('button', { class: 'ca-sess-del', onclick: (e) => caClose(s.id, e), title: 'Close' }, '\u00D7')
     )
   );
 
@@ -754,7 +860,8 @@ const panelCodeAgent = () => {
     el('div', { class: 'panel-head' }, 'Claude Code'),
     el('div', { class: 'btn-row' },
       el('button', { class: 'btn sm primary', onclick: () => { ca.pickerOpen = true; render(); caLoadDir(ca.pickerPath); } }, '+ New session'),
-      el('button', { class: 'btn sm', onclick: caRefreshSessions }, 'Refresh')
+      el('button', { class: 'btn sm', onclick: caRefreshSessions }, 'Refresh'),
+      el('button', { class: 'btn sm', onclick: caLoadHistory }, 'History')
     ),
     ca.sessions.length ? el('div', { class: 'ca-sess-list' }, ...sessionTabs) : el('div', { class: 'muted small' }, 'no active sessions'),
     activeSession ? el('div', { class: 'chat-wrap' },
@@ -779,7 +886,26 @@ const panelCodeAgent = () => {
   );
 };
 
-// ─── Render (preserves chat input state) ────────────────────────────────
+// ─── Live timer interval ─────────────────────────────────────────────────
+let liveTimerInterval = null;
+
+const startLiveTimer = () => {
+  if (liveTimerInterval) clearInterval(liveTimerInterval);
+  liveTimerInterval = setInterval(() => {
+    const timerEl = document.querySelector('.live-timer');
+    if (!timerEl || !state.chatBusy || !state.chatStartTs) {
+      clearInterval(liveTimerInterval);
+      liveTimerInterval = null;
+      return;
+    }
+    const last = state.chat[state.chat.length - 1];
+    const timeStr = last?.ts ? fmtTime(last.ts) : '';
+    const elapsed = Date.now() - state.chatStartTs;
+    timerEl.textContent = (timeStr ? timeStr + ' \u00B7 ' : '') + fmtDur(elapsed);
+  }, 1000);
+};
+
+// ─── Render (preserves scroll positions + chat input) ────────────────────
 const render = () => {
   const active = document.activeElement;
   const wasChatInput = active && active.classList && active.classList.contains('chat-input');
@@ -788,10 +914,11 @@ const render = () => {
   } : null;
 
   // If a <select> dropdown is currently open (focused), defer the re-render
-  // so we don't snap it shut during the 5s stats poll. The next tick (or the
-  // next user action that calls render()) will redraw once it's closed.
   if (document.activeElement && document.activeElement.tagName === 'SELECT') return;
 
+  // Save scroll positions for all panels + chat-log + page
+  const oldPanels = document.querySelectorAll('.panel');
+  const panelScrolls = Array.from(oldPanels).map(p => ({ top: p.scrollTop, left: p.scrollLeft }));
   const oldLog = document.querySelector('.chat-log');
   const prevScroll = oldLog ? oldLog.scrollTop : 0;
   const stickToBottom = oldLog ? (oldLog.scrollHeight - oldLog.scrollTop - oldLog.clientHeight < 60) : true;
@@ -814,15 +941,95 @@ const render = () => {
       newInput.value = preserved.value;
       newInput.focus();
       try { newInput.setSelectionRange(preserved.start, preserved.end); } catch {}
-      // Re-apply auto-grow
       newInput.style.height = 'auto';
       newInput.style.height = Math.min(newInput.scrollHeight, 160) + 'px';
     }
   }
 
+  // Restore chat-log scroll
   const newLog = document.querySelector('.chat-log');
   if (newLog) newLog.scrollTop = stickToBottom ? newLog.scrollHeight : prevScroll;
+
+  // Restore panel scroll positions (same order: system, services, actions, chat)
+  const newPanels = document.querySelectorAll('.panel');
+  newPanels.forEach((p, i) => {
+    if (panelScrolls[i]) {
+      p.scrollTop = panelScrolls[i].top;
+      p.scrollLeft = panelScrolls[i].left;
+    }
+  });
+
+  // Restore page scroll (mobile)
   if (pageScrollY) window.scrollTo(0, pageScrollY);
+
+  // Start live timer if streaming
+  if (state.chatBusy && state.chatStartTs) startLiveTimer();
+};
+
+// ─── Reconnect to background chat job ────────────────────────────────────
+const reconnectChatJob = async (jobId) => {
+  try {
+    const r = await fetch(`/api/chat/jobs/${jobId}`, {
+      headers: { ...headers() },
+    });
+    if (!r.ok) {
+      // Job gone — mark as finished
+      state.chatBusy = false;
+      state.chatStatus = null;
+      state.chatJobId = null;
+      state.chatStartTs = null;
+      const last = state.chat[state.chat.length - 1];
+      if (last && last.role === 'assistant' && !last.content) last.content = '*(session expired)*';
+      persistChat();
+      render();
+      return;
+    }
+    render();
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop() || '';
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const payload = line.slice(6);
+        if (payload === '[DONE]') continue;
+        try {
+          const j = JSON.parse(payload);
+          if (j.message?.content) {
+            state.chatStatus = 'typing';
+            state.chat[state.chat.length - 1].content += j.message.content;
+            render();
+          } else if (j.tool_call) {
+            state.chatStatus = `searching \u00B7 ${j.tool_call.name.replace(/^(get|list|read|web)_/, '')}`;
+            const last = state.chat[state.chat.length - 1];
+            if (!last.tools) last.tools = [];
+            if (!last.tools.includes(j.tool_call.name)) last.tools.push(j.tool_call.name);
+            render();
+          } else if (j.tool_result) {
+            state.chatStatus = 'thinking';
+            render();
+          }
+        } catch {}
+      }
+    }
+  } catch {}
+  const last = state.chat[state.chat.length - 1];
+  if (last && last.role === 'assistant') {
+    last.ts = Date.now();
+    last.elapsed_ms = state.chatStartTs ? Date.now() - state.chatStartTs : null;
+  }
+  state.chatJobId = null;
+  state.chatBusy = false;
+  state.chatStatus = null;
+  state.chatStartTs = null;
+  persistChat();
+  if (state.activeChatId) saveChat().catch(() => {});
+  render();
 };
 
 // ─── Polling ────────────────────────────────────────────────────────────
@@ -837,7 +1044,6 @@ const refresh = async () => {
   if (stats) state.stats = stats;
   if (services) state.services = services;
   if (models?.models) {
-    // Sort so preferred models appear first in the dropdown
     const preferred = ['llama3.1:8b', 'llama3.2:3b', 'qwen2.5:7b'];
     const byPref = (a, b) => {
       const ia = preferred.indexOf(a.name);
@@ -853,7 +1059,6 @@ const refresh = async () => {
     }
   }
   if (pull) state.pull = pull.lines;
-  // Code-agent: one-time config check then periodic session list (only if enabled)
   if (!state.codeAgent.checked) {
     state.codeAgent.checked = true;
     const cfg = await api('/api/code-agent/config');
@@ -868,10 +1073,16 @@ const refresh = async () => {
 
 // ─── Boot ───────────────────────────────────────────────────────────────
 const boot = async () => {
+  restoreChat();
   await loadSavedChats();
   render();
   refresh();
   setInterval(refresh, 5000);
+
+  // Reconnect to active background job if tab was closed/refreshed
+  if (state.chatBusy && state.chatJobId) {
+    reconnectChatJob(state.chatJobId);
+  }
 };
 
 if (!token) renderLogin();
