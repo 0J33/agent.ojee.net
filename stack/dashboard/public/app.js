@@ -145,6 +145,8 @@ let state = {
   chat: [], chatModel: '', chatBusy: false, chatStatus: null,
   savedChats: [], activeChatId: null, chatDirty: false, showSavedList: false,
   actionMsg: '',
+  codeAgent: { enabled: false, sessions: [], active: null, messages: [], busy: false, status: null, abort: null,
+    pickerOpen: false, pickerPath: '/media/ojee/NVME/Code/[GIT]/Claude', pickerEntries: [], pickerParent: null },
 };
 
 // ─── Header ─────────────────────────────────────────────────────────────
@@ -537,6 +539,191 @@ const panelChat = () => {
   );
 };
 
+// ─── Code Agent panel (Claude Code on the Loq laptop) ─────────────────
+const caLoadDir = async (p) => {
+  const data = await api('/api/code-agent/dirs' + (p ? '?path=' + encodeURIComponent(p) : ''));
+  if (data) {
+    state.codeAgent.pickerPath = data.path;
+    state.codeAgent.pickerParent = data.parent;
+    state.codeAgent.pickerEntries = data.entries || [];
+  }
+  render();
+};
+
+const caRefreshSessions = async () => {
+  const data = await api('/api/code-agent/sessions');
+  if (data) state.codeAgent.sessions = data.active || [];
+  render();
+};
+
+const caOpenHere = async () => {
+  const cwd = state.codeAgent.pickerPath;
+  const d = await api('/api/code-agent/sessions', { method: 'POST', body: JSON.stringify({ cwd }) });
+  if (d && d.id) {
+    state.codeAgent.active = d.id;
+    state.codeAgent.messages = [];
+    state.codeAgent.pickerOpen = false;
+    await caRefreshSessions();
+  }
+};
+
+const caSelect = async (id) => {
+  state.codeAgent.active = id;
+  state.codeAgent.messages = [];
+  render();
+  const h = await api(`/api/code-agent/sessions/${id}/history`);
+  if (h?.messages) state.codeAgent.messages = h.messages;
+  render();
+};
+
+const caClose = async (id, e) => {
+  if (e) e.stopPropagation();
+  if (!confirm('Close this session? (Claude history is kept on disk.)')) return;
+  await api(`/api/code-agent/sessions/${id}`, { method: 'DELETE' });
+  if (state.codeAgent.active === id) { state.codeAgent.active = null; state.codeAgent.messages = []; }
+  await caRefreshSessions();
+};
+
+const caSend = async (text) => {
+  if (!state.codeAgent.active || !text.trim() || state.codeAgent.busy) return;
+  state.codeAgent.messages.push({ role: 'user', text });
+  state.codeAgent.messages.push({ role: 'assistant', text: '' });
+  state.codeAgent.busy = true;
+  state.codeAgent.status = 'thinking';
+  render();
+  const ac = new AbortController();
+  state.codeAgent.abort = ac;
+  try {
+    const r = await fetch(`/api/code-agent/sessions/${state.codeAgent.active}/messages`, {
+      method: 'POST',
+      headers: { ...headers(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: text }),
+      signal: ac.signal
+    });
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop() || '';
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const p = line.slice(6);
+        if (p === '[DONE]') continue;
+        try {
+          const evt = JSON.parse(p);
+          const last = state.codeAgent.messages[state.codeAgent.messages.length - 1];
+          if (evt.type === 'text') { last.text += evt.text; state.codeAgent.status = 'typing'; render(); }
+          else if (evt.type === 'tool_use') { state.codeAgent.messages.push({ role: 'tool_use', tool: evt.tool, input: evt.input }); state.codeAgent.messages.push({ role: 'assistant', text: '' }); state.codeAgent.status = `running ${evt.tool}`; render(); }
+          else if (evt.type === 'tool_result') { state.codeAgent.status = 'thinking'; render(); }
+          else if (evt.type === 'result') { state.codeAgent.status = evt.is_error ? 'error' : null; }
+        } catch {}
+      }
+    }
+  } catch (e) {
+    if (e.name !== 'AbortError') {
+      const last = state.codeAgent.messages[state.codeAgent.messages.length - 1];
+      if (last) last.text = (last.text || '') + `\n\nError: ${e.message}`;
+    }
+  }
+  // Drop trailing empty assistant messages
+  while (state.codeAgent.messages.length && state.codeAgent.messages[state.codeAgent.messages.length - 1].role === 'assistant' && !state.codeAgent.messages[state.codeAgent.messages.length - 1].text) {
+    state.codeAgent.messages.pop();
+  }
+  state.codeAgent.busy = false;
+  state.codeAgent.status = null;
+  state.codeAgent.abort = null;
+  render();
+};
+
+const panelCodeAgent = () => {
+  const ca = state.codeAgent;
+  const activeSession = ca.sessions.find(s => s.id === ca.active);
+
+  // Directory picker modal
+  if (ca.pickerOpen) {
+    const rows = [];
+    if (ca.pickerParent && ca.pickerParent !== ca.pickerPath) {
+      rows.push(el('div', { class: 'ca-dir-row', onclick: () => caLoadDir(ca.pickerParent) },
+        svgChip('list_dir'), el('span', {}, '..')));
+    }
+    for (const e of ca.pickerEntries.filter(x => x.type === 'dir')) {
+      rows.push(el('div', { class: 'ca-dir-row', onclick: () => caLoadDir(e.path) },
+        svgChip('list_dir'), el('span', {}, e.name)));
+    }
+    return el('div', { class: 'panel ca-picker' },
+      el('div', { class: 'panel-head' }, 'Open Claude Code In...'),
+      el('div', { class: 'ca-path' }, ca.pickerPath),
+      el('div', { class: 'ca-dir-list' }, ...rows),
+      el('div', { class: 'btn-row' },
+        el('button', { class: 'btn sm', onclick: () => { ca.pickerOpen = false; render(); } }, 'Cancel'),
+        el('button', { class: 'btn sm primary', onclick: caOpenHere }, 'Open here')
+      )
+    );
+  }
+
+  // Session chat view
+  const msgs = ca.messages.map(m => {
+    if (m.role === 'tool_use') {
+      const input = typeof m.input === 'object' ? JSON.stringify(m.input).slice(0, 120) : String(m.input || '').slice(0, 120);
+      return el('div', { class: 'ca-tool' }, svgChip('list_models'), el('span', {}, `${m.tool}(${input})`));
+    }
+    return el('div', { class: m.role === 'user' ? 'chat-msg chat-user' : 'chat-msg chat-assistant' },
+      el('div', { class: 'chat-label' }, m.role === 'user' ? 'user' : 'claude'),
+      el('div', { class: 'md-body', html: m.role === 'assistant' ? renderMarkdown(m.text) : undefined }, m.role === 'user' ? m.text : null)
+    );
+  });
+
+  const input = el('textarea', { class: 'chat-input', rows: '1', placeholder: activeSession ? 'message Claude…' : 'pick a session' });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      const v = input.value.trim();
+      if (v) { input.value = ''; caSend(v); }
+    }
+  });
+  input.addEventListener('input', () => { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 160) + 'px'; });
+
+  const sessionTabs = ca.sessions.map(s =>
+    el('div', { class: 'ca-sess' + (s.id === ca.active ? ' active' : ''), onclick: () => caSelect(s.id) },
+      el('span', { class: 'ca-sess-title' }, s.title),
+      el('span', { class: 'ca-sess-cwd' }, s.cwd.replace(/^\/media\/ojee\/NVME\/Code\/\[GIT\]\//, '')),
+      el('button', { class: 'ca-sess-del', onclick: (e) => caClose(s.id, e), title: 'Close' }, '×')
+    )
+  );
+
+  return el('div', { class: 'panel' },
+    el('div', { class: 'panel-head' }, 'Claude Code'),
+    el('div', { class: 'btn-row' },
+      el('button', { class: 'btn sm primary', onclick: () => { ca.pickerOpen = true; render(); caLoadDir(ca.pickerPath); } }, '+ New session'),
+      el('button', { class: 'btn sm', onclick: caRefreshSessions }, 'Refresh')
+    ),
+    ca.sessions.length ? el('div', { class: 'ca-sess-list' }, ...sessionTabs) : el('div', { class: 'muted small' }, 'no active sessions'),
+    activeSession ? el('div', { class: 'chat-wrap' },
+      el('div', { class: 'ca-active-head' },
+        el('span', { class: 'ca-active-title' }, activeSession.title),
+        el('span', { class: 'ca-active-cwd' }, activeSession.cwd),
+        ca.status ? el('span', { class: 'chat-chip chip-status' }, svgChip('status'), el('span', { class: 'chip-label' }, ca.status)) : null
+      ),
+      el('div', { class: 'chat-log' }, ...msgs),
+      el('div', { class: 'chat-form' },
+        input,
+        el('button', {
+          class: 'btn primary chat-send' + (ca.busy ? ' chat-stop' : ''),
+          onclick: () => {
+            if (ca.busy) { ca.abort?.abort(); return; }
+            const v = input.value.trim();
+            if (v) { input.value = ''; caSend(v); }
+          }
+        }, ca.busy ? 'Stop' : 'Send')
+      )
+    ) : null
+  );
+};
+
 // ─── Render (preserves chat input state) ────────────────────────────────
 const render = () => {
   const active = document.activeElement;
@@ -563,7 +750,8 @@ const render = () => {
         panelSystem(),
         panelServices(),
         panelActions(),
-        panelChat()
+        panelChat(),
+        state.codeAgent.enabled ? panelCodeAgent() : null
       )
     )
   );
@@ -613,6 +801,16 @@ const refresh = async () => {
     }
   }
   if (pull) state.pull = pull.lines;
+  // Code-agent: one-time config check then periodic session list (only if enabled)
+  if (!state.codeAgent.checked) {
+    state.codeAgent.checked = true;
+    const cfg = await api('/api/code-agent/config');
+    state.codeAgent.enabled = !!cfg?.enabled;
+  }
+  if (state.codeAgent.enabled && !state.codeAgent.busy) {
+    const s = await api('/api/code-agent/sessions');
+    if (s?.active) state.codeAgent.sessions = s.active;
+  }
   render();
 };
 

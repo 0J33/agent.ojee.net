@@ -50,6 +50,8 @@ services:
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
       - N8N_BASE_URL=http://n8n:5678
       - N8N_API_KEY=${N8N_API_KEY:-}
+      - CODE_AGENT_URL=${CODE_AGENT_URL:-http://100.81.241.55:7777}
+      - CODE_AGENT_TOKEN=${CODE_AGENT_TOKEN:-}
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=utility
     runtime: nvidia

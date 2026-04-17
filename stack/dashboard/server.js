@@ -12,6 +12,8 @@ const JWT_SECRET = process.env.JWT_SECRET || require('crypto').randomBytes(32).t
 const OLLAMA = process.env.OLLAMA_BASE_URL || 'http://host.docker.internal:11434';
 const N8N_BASE = process.env.N8N_BASE_URL || 'http://n8n:5678';
 const N8N_API_KEY = process.env.N8N_API_KEY || '';
+const CODE_AGENT_URL = process.env.CODE_AGENT_URL || '';
+const CODE_AGENT_TOKEN = process.env.CODE_AGENT_TOKEN || '';
 
 const n8nApi = async (path, opts = {}) => {
   if (!N8N_API_KEY) throw new Error('N8N_API_KEY not set in .env — generate one in n8n Settings → n8n API');
@@ -708,5 +710,74 @@ app.post('/api/action', auth, (req, res) => {
 
 // ─── Static ───────────────────────────────────────────────────────────────
 app.use(express.static(path.join(__dirname, 'public')));
+
+// ─── Code Agent proxy (Loq laptop Claude Code) ─────────────────────────
+// Forward requests to the loq code-agent over the tailnet. Auth passthrough
+// using the server-side CODE_AGENT_TOKEN — clients use the dashboard's JWT.
+const codeAgentUp = () => !!CODE_AGENT_URL && !!CODE_AGENT_TOKEN;
+
+const codeAgentReq = async (pathAndQuery, opts = {}) => {
+  if (!codeAgentUp()) throw new Error('code agent not configured');
+  const r = await fetch(`${CODE_AGENT_URL}${pathAndQuery}`, {
+    ...opts,
+    headers: { Authorization: `Bearer ${CODE_AGENT_TOKEN}`, 'Content-Type': 'application/json', ...(opts.headers || {}) }
+  });
+  return r;
+};
+
+app.get('/api/code-agent/config', auth, (req, res) => res.json({ enabled: codeAgentUp() }));
+
+app.get('/api/code-agent/dirs', auth, async (req, res) => {
+  try {
+    const qs = req.query.path ? `?path=${encodeURIComponent(req.query.path)}` : '';
+    const r = await codeAgentReq(`/api/dirs${qs}`);
+    res.status(r.status).json(await r.json());
+  } catch (e) { res.status(500).json({ error: String(e.message || e) }); }
+});
+
+app.get('/api/code-agent/sessions', auth, async (req, res) => {
+  try { const r = await codeAgentReq('/api/sessions'); res.status(r.status).json(await r.json()); }
+  catch (e) { res.status(500).json({ error: String(e.message || e) }); }
+});
+
+app.post('/api/code-agent/sessions', auth, async (req, res) => {
+  try {
+    const r = await codeAgentReq('/api/sessions', { method: 'POST', body: JSON.stringify(req.body || {}) });
+    res.status(r.status).json(await r.json());
+  } catch (e) { res.status(500).json({ error: String(e.message || e) }); }
+});
+
+app.delete('/api/code-agent/sessions/:id', auth, async (req, res) => {
+  try { const r = await codeAgentReq(`/api/sessions/${req.params.id}`, { method: 'DELETE' }); res.status(r.status).json(await r.json()); }
+  catch (e) { res.status(500).json({ error: String(e.message || e) }); }
+});
+
+app.get('/api/code-agent/sessions/:id/history', auth, async (req, res) => {
+  try { const r = await codeAgentReq(`/api/sessions/${req.params.id}/history`); res.status(r.status).json(await r.json()); }
+  catch (e) { res.status(500).json({ error: String(e.message || e) }); }
+});
+
+// Message endpoint: stream SSE from loq through to our client.
+app.post('/api/code-agent/sessions/:id/messages', auth, async (req, res) => {
+  if (!codeAgentUp()) return res.status(503).json({ error: 'code agent not configured' });
+  const ac = new AbortController();
+  res.on('close', () => { if (!res.writableFinished) ac.abort(); });
+  try {
+    const upstream = await fetch(`${CODE_AGENT_URL}/api/sessions/${req.params.id}/messages`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${CODE_AGENT_TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(req.body || {}),
+      signal: ac.signal
+    });
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    upstream.body.on('data', chunk => res.write(chunk));
+    upstream.body.on('end', () => res.end());
+    upstream.body.on('error', () => res.end());
+  } catch (e) {
+    if (e.name !== 'AbortError') res.status(502).json({ error: String(e.message || e) });
+  }
+});
 
 app.listen(PORT, '0.0.0.0', () => console.log(`dashboard listening on :${PORT}`));
