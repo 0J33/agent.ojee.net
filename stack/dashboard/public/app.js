@@ -141,6 +141,7 @@ const logout = () => { token = ''; localStorage.removeItem('auth_token'); render
 
 // ─── State ──────────────────────────────────────────────────────────────
 let state = {
+  view: (location.hash.replace(/^#\/?/, '') || 'dashboard'),
   stats: null, services: null, models: [], pull: [],
   chat: [], chatModel: '', chatBusy: false, chatStatus: null,
   savedChats: [], activeChatId: null, chatDirty: false, showSavedList: false,
@@ -149,11 +150,28 @@ let state = {
     pickerOpen: false, pickerPath: '/media/ojee/NVME/Code/[GIT]/Claude', pickerEntries: [], pickerParent: null },
 };
 
+window.addEventListener('hashchange', () => {
+  state.view = location.hash.replace(/^#\/?/, '') || 'dashboard';
+  render();
+});
+
+const setView = (v) => {
+  state.view = v;
+  history.replaceState(null, '', '#/' + v);
+  render();
+};
+
 // ─── Header ─────────────────────────────────────────────────────────────
 const renderHeader = (stats) => el('div', { class: 'header' },
   el('div', { class: 'brand-wrap' },
     brandIcon(),
     el('span', { class: 'brand' }, 'AGENT')
+  ),
+  el('nav', { class: 'top-nav' },
+    el('button', { class: 'nav-btn' + (state.view === 'dashboard' ? ' active' : ''), onclick: () => setView('dashboard') }, 'Dashboard'),
+    state.codeAgent.enabled
+      ? el('button', { class: 'nav-btn' + (state.view === 'code' ? ' active' : ''), onclick: () => setView('code') }, 'Claude Code')
+      : null
   ),
   el('div', { class: 'header-right' },
     el('span', { class: stats ? 'online' : 'online offline' }, stats ? 'ONLINE' : 'OFFLINE'),
@@ -743,16 +761,13 @@ const render = () => {
   const pageScrollY = window.scrollY || document.documentElement.scrollTop || 0;
 
   document.body.innerHTML = '';
+  const content = state.view === 'code'
+    ? el('div', { class: 'code-page' }, panelCodeAgent())
+    : el('div', { class: 'grid' }, panelSystem(), panelServices(), panelActions(), panelChat());
   document.body.append(
     el('div', { class: 'dash' },
       renderHeader(state.stats),
-      el('div', { class: 'grid' },
-        panelSystem(),
-        panelServices(),
-        panelActions(),
-        panelChat(),
-        state.codeAgent.enabled ? panelCodeAgent() : null
-      )
+      content
     )
   );
 
