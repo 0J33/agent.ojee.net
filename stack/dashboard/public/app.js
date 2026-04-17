@@ -1246,7 +1246,7 @@ const refresh = async () => {
   if (stats) state.stats = stats;
   if (services) state.services = services;
   if (models?.models) {
-    const preferred = ['llama3.1:8b', 'llama3.2:3b', 'qwen2.5:7b'];
+    const preferred = ['hermes3:8b', 'llama3.1:8b', 'llama3.2:3b', 'qwen2.5:7b'];
     const byPref = (a, b) => {
       const ia = preferred.indexOf(a.name);
       const ib = preferred.indexOf(b.name);
