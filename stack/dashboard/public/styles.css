@@ -116,7 +116,8 @@ button { cursor: pointer; }
 .chat-wrap { display: flex; flex-direction: column; flex: 1; min-height: 0; gap: 6px; }
 .chat-log { flex: 1; overflow-y: auto; padding: 4px 2px; display: flex; flex-direction: column; gap: 8px; font-size: 0.78rem; line-height: 1.55; -webkit-overflow-scrolling: touch; min-height: 80px; }
 .chat-empty { color: var(--text-dimmer); font-size: 0.7rem; text-align: center; padding: 24px 10px; }
-.chat-msg { padding: 10px 12px; border-radius: 4px; }
+.chat-msg { padding: 10px 12px; border-radius: 4px; flex-shrink: 0; }
+.ca-tool { flex-shrink: 0; }
 .chat-user { background: #0c1818; border-left: 2px solid var(--accent); }
 .chat-user .md-body { white-space: pre-wrap; word-break: break-word; }
 .chat-assistant { background: #0a0a0a; border-left: 2px solid #444; }
