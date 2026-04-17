@@ -178,17 +178,27 @@ const panelSystem = () => {
   const s = state.stats;
   if (!s) return el('div', { class: 'panel' }, el('div', { class: 'panel-head' }, 'System'), el('div', { class: 'muted' }, 'loading…'));
   const cpuTemp = (s.temps || []).find(t => t.label === 'CPU Package');
+  const g = s.gpu;
+  const d = s.disk;
+  const diskIO = (d.read_per_s != null || d.write_per_s != null)
+    ? `↑${fmt(d.write_per_s || 0)}/s ↓${fmt(d.read_per_s || 0)}/s` : null;
   return el('div', { class: 'panel' },
     el('div', { class: 'panel-head' }, 'System'),
     statRow('Uptime', fmtUp(s.uptime)),
     statRow('OS', s.os),
-    statRow('CPU', `${s.cpu.physical}c/${s.cpu.cores}t — ${s.cpu.avg.toFixed(0)}%`),
+    statRow('CPU', s.cpu.model),
+    statRow('CPU Load', `${s.cpu.physical}c/${s.cpu.cores}t — ${s.cpu.avg.toFixed(0)}%`),
+    cpuTemp ? statRow('CPU Temp', `${cpuTemp.current}°C`, cpuTemp.current > 80) : null,
+    g ? statRow('GPU', `${g.vendor ? g.vendor + ' ' : ''}${g.model}`) : null,
+    g && g.util != null ? statRow('GPU Load', `${g.util}%${g.vram_mb ? ` · ${(g.vram_mb / 1024).toFixed(1)} GB VRAM` : ''}`) : null,
+    g && g.temp != null ? statRow('GPU Temp', `${g.temp}°C`, g.temp > 85) : null,
     statRow('RAM', `${fmt(s.memory.used)} / ${fmt(s.memory.total)} (${s.memory.percent}%)`),
     statRow('Swap', `${fmt(s.swap.used)} / ${fmt(s.swap.total)}`),
     statRow('Disk /', `${fmt(s.disk.used)} / ${fmt(s.disk.total)} (${s.disk.percent}%)`),
-    cpuTemp ? statRow('CPU Temp', `${cpuTemp.current}°C`, cpuTemp.current > 80) : null,
+    diskIO ? statRow('Disk I/O', diskIO) : null,
     statRow('Network', `↑${fmt(s.network.sent_per_s)}/s ↓${fmt(s.network.recv_per_s)}/s`),
     ...bar('CPU', s.cpu.avg),
+    g && g.util != null ? bar('GPU', g.util) : [],
     ...bar('RAM', s.memory.percent),
     ...bar('Disk', s.disk.percent)
   );
@@ -585,11 +595,19 @@ const refresh = async () => {
   if (stats) state.stats = stats;
   if (services) state.services = services;
   if (models?.models) {
-    state.models = models.models;
-    if (!state.chatModel && models.models.length) {
-      const preferred = ['llama3.1:8b', 'llama3.2:3b', 'qwen2.5:7b'];
-      const pick = preferred.map(p => models.models.find(m => m.name === p)).find(Boolean);
-      state.chatModel = (pick || models.models[0]).name;
+    // Sort so preferred models appear first in the dropdown
+    const preferred = ['llama3.1:8b', 'llama3.2:3b', 'qwen2.5:7b'];
+    const byPref = (a, b) => {
+      const ia = preferred.indexOf(a.name);
+      const ib = preferred.indexOf(b.name);
+      if (ia === -1 && ib === -1) return 0;
+      if (ia === -1) return 1;
+      if (ib === -1) return -1;
+      return ia - ib;
+    };
+    state.models = [...models.models].sort(byPref);
+    if (!state.chatModel && state.models.length) {
+      state.chatModel = state.models[0].name;
     }
   }
   if (pull) state.pull = pull.lines;

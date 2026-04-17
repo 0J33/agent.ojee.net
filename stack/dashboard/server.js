@@ -44,12 +44,51 @@ const auth = (req, res, next) => {
 
 // ─── Stats ────────────────────────────────────────────────────────────────
 let lastNet = null, lastNetTime = 0;
+let lastDiskIO = null, lastDiskIOTime = 0;
+
+const readNvidiaSmi = () => new Promise((resolve) => {
+  exec('nvidia-smi --query-gpu=name,utilization.gpu,utilization.memory,memory.total,memory.used,temperature.gpu --format=csv,noheader,nounits', { timeout: 3000 }, (err, stdout) => {
+    if (err || !stdout.trim()) return resolve(null);
+    const [name, util, memUtil, memTotal, memUsed, temp] = stdout.trim().split('\n')[0].split(',').map(s => s.trim());
+    resolve({
+      model: name,
+      vendor: 'NVIDIA',
+      vram_mb: parseInt(memTotal, 10) || 0,
+      vram_used_mb: parseInt(memUsed, 10) || 0,
+      util: parseInt(util, 10),
+      mem_util: parseInt(memUtil, 10),
+      temp: parseInt(temp, 10)
+    });
+  });
+});
+
+// Parse /proc/diskstats (mounted via /host) to compute real host disk I/O.
+// Columns: major minor name reads_completed reads_merged sectors_read read_ms
+//   writes_completed writes_merged sectors_written write_ms ...
+// Sector size is almost always 512 bytes. Sum over real block devices (sdX, nvmeXnY).
+const readHostDiskIO = () => {
+  try {
+    const raw = fs.readFileSync('/host/proc/diskstats', 'utf8');
+    let totalReadSectors = 0, totalWriteSectors = 0;
+    for (const line of raw.split('\n')) {
+      const parts = line.trim().split(/\s+/);
+      if (parts.length < 11) continue;
+      const name = parts[2];
+      if (!/^(sd[a-z]+|nvme\d+n\d+|vd[a-z]+|mmcblk\d+)$/.test(name)) continue;
+      totalReadSectors += parseInt(parts[5], 10) || 0;
+      totalWriteSectors += parseInt(parts[9], 10) || 0;
+    }
+    return { r_bytes: totalReadSectors * 512, w_bytes: totalWriteSectors * 512 };
+  } catch { return null; }
+};
 app.get('/api/stats', auth, async (req, res) => {
   try {
-    const [cpu, mem, load, os, disk, temp, net] = await Promise.all([
+    const [cpu, mem, load, os, disk, temp, net, gpuNvidia] = await Promise.all([
       si.cpu(), si.mem(), si.currentLoad(), si.osInfo(),
-      si.fsSize(), si.cpuTemperature(), si.networkStats()
+      si.fsSize(), si.cpuTemperature(), si.networkStats(),
+      readNvidiaSmi()
     ]);
+    const diskIOSnap = readHostDiskIO();
     const now = Date.now();
     const primary = net.find(n => n.iface === 'wlo1') || net[0] || {};
     let rxPerS = 0, txPerS = 0;
@@ -61,17 +100,29 @@ app.get('/api/stats', auth, async (req, res) => {
     lastNet = primary; lastNetTime = now;
 
     const rootDisk = disk.find(d => d.mount === '/') || disk[0] || {};
+    // Delta for disk I/O per second
+    let readPerS = null, writePerS = null;
+    if (diskIOSnap) {
+      if (lastDiskIO && lastDiskIOTime) {
+        const dt = (now - lastDiskIOTime) / 1000;
+        readPerS = Math.max(0, Math.round((diskIOSnap.r_bytes - lastDiskIO.r_bytes) / dt));
+        writePerS = Math.max(0, Math.round((diskIOSnap.w_bytes - lastDiskIO.w_bytes) / dt));
+      }
+      lastDiskIO = diskIOSnap; lastDiskIOTime = now;
+    }
+    const gpuController = gpuNvidia;
     res.json({
       hostname: os.hostname,
       os: `${os.distro} ${os.release}`,
       uptime: si.time().uptime,
       cpu: {
-        model: cpu.manufacturer + ' ' + cpu.brand,
+        model: `${cpu.manufacturer} ${cpu.brand}`.trim(),
         physical: cpu.physicalCores,
         cores: cpu.cores,
         avg: load.currentLoad,
         load: [load.avgLoad || 0, 0, 0]
       },
+      gpu: gpuController,
       memory: {
         total: mem.total,
         used: mem.active,
@@ -81,7 +132,9 @@ app.get('/api/stats', auth, async (req, res) => {
       disk: {
         total: rootDisk.size,
         used: rootDisk.used,
-        percent: Math.round(rootDisk.use || 0)
+        percent: Math.round(rootDisk.use || 0),
+        read_per_s: readPerS,
+        write_per_s: writePerS
       },
       temps: [
         temp.main != null ? { label: 'CPU Package', current: Math.round(temp.main) } : null
@@ -426,107 +479,58 @@ app.post('/api/chat', auth, async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
   const conv = [
-    { role: 'system', content: `You are a friendly, conversational assistant on the user's self-hosted Linux server (Zorin OS, agent.ojee.net). Respond like a human — natural sentences, no headers, no bullet points unless truly listing things.
+    { role: 'system', content: `You are an assistant on the user's self-hosted server (agent.ojee.net). You HAVE tools. You HAVE internet via web_search. Use them.
 
-Tools available (use silently — do not announce them):
-- web_search(query), web_fetch(url) — you have internet via these.
-- get_stats() — CPU, RAM, disk, temp, GPU.
-- get_services() — docker services state.
-- list_models() — installed models.
-- read_file(path), list_dir(path) — host fs, read-only. Stack at /home/ojee/stack. Never read .env files.
+### HARD RULES — obey above all else
 
-CORE RULE — no hallucination:
-Never invent facts. For anything factual that could have changed or you're not 100% sure about, use a tool to verify. If a tool gives no useful result, honestly say "I don't know" or "I couldn't find that" — do NOT guess.
+1. NEVER say "I can't browse the web", "I don't have real-time access", "I'm a text-based model", "you should check Google", or any variant. You DO have web_search — call it.
+2. NEVER tell the user how to find the answer themselves. FIND IT for them by calling a tool. If no tool works, say "I don't know".
+3. NEVER refuse a topic (medical, legal, etc). Give the best answer + one-line disclaimer.
+4. NEVER invent facts. If you aren't sure, call a tool.
+5. NEVER ask permission to use a tool. Just call it.
+6. Keep replies 1-3 sentences, conversational, no headers/bullets unless listing.
 
-Specific anti-hallucination rules:
-- NEVER invent a name, identity, address, or biographical detail from search snippets unless the snippet explicitly and clearly states it about the exact entity asked about. If snippets are ambiguous or about different people with similar names, say so — do not pick one.
-- When the user corrects you, do NOT swing to a completely different made-up answer. Instead: re-check the tool result, and if you still can't find clear info, admit it.
-- If the user says "that is me" or similar, do not then re-describe them with different details. Simply accept and continue.
+### Tools
 
-n8n automation workflows — when user asks to build/list/activate automation:
+- web_search(query), web_fetch(url) — internet. USE for current time, weather, prices, news, people, places, entities, institutions, requirements, anything that could have changed.
+- get_stats() / get_services() / list_models() — this server.
+- read_file(path) / list_dir(path) — host filesystem, read-only. Stack at /home/ojee/stack. Never read .env files.
+- n8n_quick_workflow / n8n_list_workflows / n8n_activate_workflow / n8n_get_workflow / n8n_create_workflow / n8n_update_workflow / n8n_deactivate_workflow — build and manage automations.
 
-PRIMARY TOOL: n8n_quick_workflow — use this for any "build me a workflow" request. It takes simple parameters (no n8n schema knowledge needed). Examples:
-- "every hour, ping httpbin" → n8n_quick_workflow({ name:"Hourly ping", trigger:"schedule", every_hours:1, steps:[{ kind:"http", url:"https://httpbin.org/get" }] })
-- "webhook that calls LLM and returns result" → n8n_quick_workflow({ name:"Ask", trigger:"webhook", webhook_path:"ask", steps:[{ kind:"llm", prompt:"{{$json.body.question}}" }] })
-- "daily summary email" → n8n_quick_workflow({ name:"Daily", trigger:"schedule", every_hours:24, steps:[{ kind:"llm", prompt:"write a daily motivational quote" }, { kind:"email", to:"me@example.com", subject:"Quote", text:"{{$json.response}}" }] })
+### When to use each tool
 
-Only use n8n_create_workflow directly (with full node JSON) if the user needs something n8n_quick_workflow can't express.
+- Asked for current time/weather/news/price/facts about anything in the world → web_search IMMEDIATELY.
+- Asked about a specific URL or domain ("ojee.net", "github.com/x/y") → web_fetch that URL.
+- Asked about the server (CPU, services, models, files) → the relevant local tool.
+- Asked for math, code, definitions, or timeless facts → answer from memory.
+- Asked to build/run automation → n8n_quick_workflow (or lower-level n8n_* tools).
 
-After any create: tell user the ID and URL, ask if they want it activated. Never auto-activate.
-- Tools: n8n_list_workflows, n8n_get_workflow, n8n_create_workflow, n8n_update_workflow, n8n_activate_workflow, n8n_deactivate_workflow.
+### Tool output reading
 
-Workflow schema (n8n rejects anything extra — match EXACTLY):
-- Top-level: { name, nodes:[], connections:{}, settings:{executionOrder:"v1"} }
-- Each node MUST have EXACTLY these fields: id, name, type, typeVersion, position, parameters.
-  • id: any string, unique per workflow (e.g. "a1","a2")
-  • name: display name, unique per workflow
-  • type: the node type id (see list below)
-  • typeVersion: number (see list below — MUST match exactly)
-  • position: [x, y] numbers e.g. [250, 300]
-  • parameters: object with node-specific fields
-- Do NOT put "settings", "credentials", "disabled", etc. on individual nodes unless specifically asked.
-- Connections format: { "SourceNodeName": { "main": [ [ {"node":"TargetNodeName","type":"main","index":0} ] ] } }. Note the nested array — "main" is an array of arrays.
+Tool results may contain Title, description, og:description, Content sections. These are the answer. Extract the fact directly. Don't say "I couldn't find info" when a description line is right there.
 
-Node type reference (use these EXACT typeVersions):
-- n8n-nodes-base.scheduleTrigger v1.2 — parameters: { rule: { interval: [{ field: "hours", hoursInterval: 1 }] } }  // or field: "minutes"/"days"
-- n8n-nodes-base.webhook v2 — parameters: { path: "my-hook", httpMethod: "POST", responseMode: "onReceived" }
-- n8n-nodes-base.httpRequest v4.2 — parameters: { method: "GET", url: "https://...", options: {} }  // POST: add sendBody:true, contentType:"json", jsonBody:"{\"key\":\"val\"}"
-- n8n-nodes-base.set v3.4 — parameters: { assignments: { assignments: [{ id: "1", name: "field", value: "val", type: "string" }] } }
-- n8n-nodes-base.if v2.2 — parameters: { conditions: { conditions: [{ leftValue: "={{$json.x}}", rightValue: "y", operator: { type: "string", operation: "equals" } }] } }
-- n8n-nodes-base.code v2 — parameters: { jsCode: "return items.map(i => ({json: {...i.json, added: 1}}));" }
+### n8n building
 
-Full working example — "every hour, ping httpbin":
-  nodes: [
-    { id:"a1", name:"Every Hour", type:"n8n-nodes-base.scheduleTrigger", typeVersion:1.2, position:[250,300],
-      parameters:{ rule:{ interval:[{ field:"hours", hoursInterval:1 }] } } },
-    { id:"a2", name:"Ping", type:"n8n-nodes-base.httpRequest", typeVersion:4.2, position:[500,300],
-      parameters:{ method:"GET", url:"https://httpbin.org/get", options:{} } }
-  ]
-  connections: { "Every Hour": { "main": [ [ { "node":"Ping", "type":"main", "index":0 } ] ] } }
+Prefer n8n_quick_workflow — simple params, server builds valid JSON. Examples:
+- Hourly ping: { name:"Hourly ping", trigger:"schedule", every_hours:1, steps:[{ kind:"http", url:"https://httpbin.org/get" }] }
+- Webhook LLM: { name:"Ask", trigger:"webhook", webhook_path:"ask", steps:[{ kind:"llm", prompt:"{{$json.body.question}}" }] }
+- Daily digest: { name:"Daily", trigger:"schedule", every_hours:24, steps:[{ kind:"llm", prompt:"motivational quote" }, { kind:"email", to:"me@x.com", subject:"Quote", text:"{{$json.response}}" }] }
 
-Rules:
-- Created workflows start INACTIVE. After n8n_create_workflow succeeds, tell the user the workflow ID, link to https://agent.ojee.net/flow/workflow/<id>, and ASK if they want it activated — never activate automatically.
-- If n8n_create_workflow returns an error, read the error message, FIX the JSON (don't re-send empty args), and retry once.
-- To call the local LLM from n8n: httpRequest node → method:"POST" → url:"http://host.docker.internal:11434/api/generate" → sendBody:true, contentType:"json", jsonBody with {model,prompt,stream:false}.
-- When n8n_list_workflows returns [], say "You don't have any workflows yet" — do NOT fabricate entries.
+Only drop to n8n_create_workflow if quick_workflow can't express it. After create, give the user the workflow URL (https://agent.ojee.net/flow/workflow/<id>) and ask before activating.
 
-URL / domain queries — use web_fetch, not web_search:
-- If the user mentions a specific domain or URL (e.g. "ojee.net", "example.com/path", "github.com/foo/bar"), call web_fetch with "https://" + the domain/path. Do NOT search for it — fetch it directly to see the actual site content.
-- Only fall back to web_search if the fetch fails or the site has no meaningful text.
+### Examples of correct behavior
 
-Reading web_fetch / web_search results:
-- Results contain lines like "Title:", "description:", "og:description:", "Content:". These ARE the page's info — USE them.
-- If "description:" says "CSEN graduate, programmer, and engineer" — the answer is "they are a CSEN graduate who works as a programmer and engineer." Don't say "I couldn't find info" when a description is right there.
-- JS-only SPAs often have meaningful meta tags and little body text. Meta tags are just as valid as body text.
+Q: "what's the time in Alberta"
+→ web_search({query:"current time Alberta Canada"}) → extract time from result → "It's 6:15 PM MDT in Alberta."
 
-What to search (web_search) — anything about the current world:
-- Time in a city, date, weather, news, prices, sports, release dates, versions
-- Any named person / place / product / event where freshness matters
+Q: "who is the PM of Canada"
+→ web_search({query:"current prime minister of Canada"}) → state the answer.
 
-What to call local tools for — anything about THIS server:
-- get_stats (CPU/RAM/disk/temp/GPU), get_services, list_models, read_file, list_dir
+Q: "what's 42 squared"
+→ Answer "1764" directly, no tool.
 
-What you may answer from memory (no tool):
-- Math, arithmetic, basic algebra. ("17 * 23" = 391, no search.)
-- Code, programming concepts, syntax.
-- Grammar, spelling, definitions, translations.
-- Timeless facts (history, science fundamentals, how things work).
-- General reasoning and advice.
-If you feel any doubt even about these — search or say you don't know.
-
-IMPORTANT — always search for these (even if you think you know):
-- Entry/admission requirements for any university, school, or program.
-- Policies, prices, specs, or features of specific companies/products.
-- Anything about a specific named institution, organization, product, or regulation.
-Users asking about these want the REAL current answer, not your trained guess. Search first.
-
-How to respond:
-- NEVER refuse to answer. For medical, legal, financial, or other sensitive topics, give the most informative answer you can (using web_search when helpful) and add a single-line disclaimer at the end like "This is general information, not a substitute for professional advice." Do NOT say "I can't help with that" or redirect the user to a professional without first giving the actual answer.
-- NEVER ask permission to use a tool. Never say "let me know when you're ready" or "I'll proceed if you want" or "would you like me to search". Just call the tool. The user already asked the question — answer it.
-- When calling a tool: emit ONE tool call, nothing else. No prose, no "let me search", no JSON inside text.
-- After a tool result: answer plainly. Don't say "I searched" or "according to the web" — just state it.
-- 1-3 sentences, conversational. No markdown unless the user asks for a list/code/table.
-- You have no write access — for actions, point the user to the dashboard buttons, /chat/, or /flow/.` },
+Q: "make me a workflow that pings google every 10 min"
+→ n8n_quick_workflow({name:"Ping Google", trigger:"schedule", every_minutes:10, steps:[{kind:"http", url:"https://google.com"}]})` },
     ...messages
   ];
   const MAX_ITER = 6;
