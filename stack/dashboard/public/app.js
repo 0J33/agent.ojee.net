@@ -924,12 +924,22 @@ const panelCodeAgent = () => {
   // History browser
   if (ca.historyOpen) {
     if (ca.historyView) {
-      // Viewing a specific past conversation
-      const filtered = ca.historyShowTools
-        ? ca.historyMessages
-        : ca.historyMessages.filter(m => m.role !== 'tool_use');
-      const toolCount = ca.historyMessages.filter(m => m.role === 'tool_use').length;
-      const msgs = filtered.map(m => {
+      // Viewing a specific past conversation.
+      // Merge consecutive same-role text messages into one block so a single
+      // "claude turn" that was broken across many tool calls renders as one
+      // coherent response, not a stack of tiny fragments.
+      const grouped = [];
+      let toolCount = 0;
+      for (const m of ca.historyMessages) {
+        if (m.role === 'tool_use') { toolCount++; if (!ca.historyShowTools) continue; grouped.push(m); continue; }
+        const last = grouped[grouped.length - 1];
+        if (last && last.role === m.role && (last.role === 'user' || last.role === 'assistant')) {
+          last.text = (last.text || '') + '\n\n' + (m.text || '');
+        } else {
+          grouped.push({ ...m });
+        }
+      }
+      const msgs = grouped.map(m => {
         if (m.role === 'tool_use') {
           const input = typeof m.input === 'object' ? JSON.stringify(m.input).slice(0, 120) : String(m.input || '').slice(0, 120);
           return el('div', { class: 'ca-tool' }, svgChip('list_models'), el('span', {}, `${m.tool}(${input})`));
