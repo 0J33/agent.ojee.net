@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180" width="180" height="180">
+  <rect width="180" height="180" fill="#000000"/>
+  <g transform="translate(90 90) scale(4.5) translate(-12 -12)">
+    <!-- Three nodes connected by lines, n8n-style -->
+    <circle cx="5" cy="12" r="2.8" fill="#EA4B71"/>
+    <circle cx="12" cy="6" r="2.8" fill="#EA4B71"/>
+    <circle cx="12" cy="18" r="2.8" fill="#EA4B71"/>
+    <circle cx="19" cy="12" r="2.8" fill="#EA4B71"/>
+    <path d="M7.3 10.5 L10 7.5 M7.3 13.5 L10 16.5 M14 7.5 L16.7 10.5 M14 16.5 L16.7 13.5" stroke="#EA4B71" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+  </g>
+</svg>

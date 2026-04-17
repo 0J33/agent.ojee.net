@@ -39,6 +39,12 @@ chat.agent.ojee.net {
 # n8n
 flow.agent.ojee.net {
   import cf_tls
+  # Serve a custom apple-touch-icon from the dashboard (n8n doesn't ship one)
+  @apple path /apple-touch-icon.png /apple-touch-icon*.png /apple-touch-icon.svg
+  handle @apple {
+    rewrite * /n8n-apple-touch-icon.png
+    reverse_proxy dashboard:8080
+  }
   reverse_proxy n8n:5678
   encode gzip
 }

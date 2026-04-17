@@ -195,12 +195,14 @@ const panelSystem = () => {
     statRow('RAM', `${fmt(s.memory.used)} / ${fmt(s.memory.total)} (${s.memory.percent}%)`),
     statRow('Swap', `${fmt(s.swap.used)} / ${fmt(s.swap.total)}`),
     statRow('Disk /', `${fmt(s.disk.used)} / ${fmt(s.disk.total)} (${s.disk.percent}%)`),
+    s.home ? statRow('Disk /home', `${fmt(s.home.used)} / ${fmt(s.home.total)} (${s.home.percent}%)`) : null,
     diskIO ? statRow('Disk I/O', diskIO) : null,
     statRow('Network', `↑${fmt(s.network.sent_per_s)}/s ↓${fmt(s.network.recv_per_s)}/s`),
     ...bar('CPU', s.cpu.avg),
     g && g.util != null ? bar('GPU', g.util) : [],
     ...bar('RAM', s.memory.percent),
-    ...bar('Disk', s.disk.percent)
+    ...bar('Disk /', s.disk.percent),
+    s.home ? bar('Disk /home', s.home.percent) : []
   );
 };
 

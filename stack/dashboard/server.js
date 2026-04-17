@@ -100,6 +100,7 @@ app.get('/api/stats', auth, async (req, res) => {
     lastNet = primary; lastNetTime = now;
 
     const rootDisk = disk.find(d => d.mount === '/') || disk[0] || {};
+    const homeDisk = disk.find(d => d.mount === '/home') || null;
     // Delta for disk I/O per second
     let readPerS = null, writePerS = null;
     if (diskIOSnap) {
@@ -136,6 +137,11 @@ app.get('/api/stats', auth, async (req, res) => {
         read_per_s: readPerS,
         write_per_s: writePerS
       },
+      home: homeDisk ? {
+        total: homeDisk.size,
+        used: homeDisk.used,
+        percent: Math.round(homeDisk.use || 0)
+      } : null,
       temps: [
         temp.main != null ? { label: 'CPU Package', current: Math.round(temp.main) } : null
       ].filter(Boolean),
@@ -266,7 +272,7 @@ const TOOLS = [
       type: 'object',
       properties: {
         name: { type: 'string', description: 'Workflow name' },
-        trigger: { type: 'string', enum: ['schedule', 'webhook'], description: 'What fires the workflow' },
+        trigger: { type: 'string', enum: ['schedule', 'webhook', 'manual'], description: 'What fires the workflow. "manual" = user clicks a button in n8n to run it (great for testing).' },
         every_hours: { type: 'number', description: 'For schedule: interval in hours (e.g. 1 for hourly). Default 1.' },
         every_minutes: { type: 'number', description: 'For schedule: interval in minutes. Overrides every_hours if given.' },
         webhook_path: { type: 'string', description: 'For webhook: URL path (e.g. "my-hook")' },
@@ -385,11 +391,16 @@ const runTool = async (name, args) => {
     return await n8nApi(`/workflows/${args.id}`);
   }
   if (name === 'n8n_create_workflow') {
+    const coerce = (v) => {
+      if (typeof v !== 'string') return v;
+      try { return JSON.parse(v.replace(/([{,]\s*)([a-zA-Z_]\w*)\s*:/g, '$1"$2":').replace(/:\s*'([^']*)'/g, ':"$1"')); }
+      catch { return v; }
+    };
     const body = {
       name: args.name,
-      nodes: args.nodes || [],
-      connections: args.connections || {},
-      settings: args.settings || { executionOrder: 'v1' }
+      nodes: coerce(args.nodes) || [],
+      connections: coerce(args.connections) || {},
+      settings: coerce(args.settings) || { executionOrder: 'v1' }
     };
     const r = await n8nApi('/workflows', { method: 'POST', body: JSON.stringify(body) });
     return { id: r.id, name: r.name, active: r.active };
@@ -412,6 +423,14 @@ const runTool = async (name, args) => {
     return await n8nApi(`/workflows/${args.id}/deactivate`, { method: 'POST' });
   }
   if (name === 'n8n_quick_workflow') {
+    // Model sometimes sends nested arrays/objects as strings. Coerce.
+    const coerce = (v) => {
+      if (typeof v !== 'string') return v;
+      try { return JSON.parse(v.replace(/([{,]\s*)([a-zA-Z_]\w*)\s*:/g, '$1"$2":').replace(/:\s*'([^']*)'/g, ':"$1"')); }
+      catch { return v; }
+    };
+    args.steps = coerce(args.steps);
+    if (!Array.isArray(args.steps)) args.steps = [];
     const nodes = [];
     const connections = {};
     let x = 250, prev = null;
@@ -433,8 +452,10 @@ const runTool = async (name, args) => {
     } else if (args.trigger === 'webhook') {
       addNode({ id: 't1', name: 'Webhook', type: 'n8n-nodes-base.webhook', typeVersion: 2,
         parameters: { path: args.webhook_path || 'hook', httpMethod: args.webhook_method || 'POST', responseMode: 'onReceived' } });
+    } else if (args.trigger === 'manual') {
+      addNode({ id: 't1', name: 'When clicked', type: 'n8n-nodes-base.manualTrigger', typeVersion: 1, parameters: {} });
     } else {
-      throw new Error(`unsupported trigger: ${args.trigger}`);
+      throw new Error(`unsupported trigger: ${args.trigger} (use "schedule", "webhook", or "manual")`);
     }
     // Steps
     (args.steps || []).forEach((s, i) => {
@@ -485,10 +506,11 @@ app.post('/api/chat', auth, async (req, res) => {
 
 1. NEVER say "I can't browse the web", "I don't have real-time access", "I'm a text-based model", "you should check Google", or any variant. You DO have web_search — call it.
 2. NEVER tell the user how to find the answer themselves. FIND IT for them by calling a tool. If no tool works, say "I don't know".
-3. NEVER refuse a topic (medical, legal, etc). Give the best answer + one-line disclaimer.
-4. NEVER invent facts. If you aren't sure, call a tool.
-5. NEVER ask permission to use a tool. Just call it.
-6. Keep replies 1-3 sentences, conversational, no headers/bullets unless listing.
+3. NEVER describe HOW to use a tool to the user. DO the thing. "Set up X", "create X", "build me X", "make X" = CALL the tool that creates X. Do not output example JSON. Do not say "you can use n8n_quick_workflow like this". CALL IT YOURSELF.
+4. NEVER refuse a topic (medical, legal, etc). Give the best answer + one-line disclaimer.
+5. NEVER invent facts. If you aren't sure, call a tool.
+6. NEVER ask permission to use a tool. Just call it.
+7. Keep replies 1-3 sentences, conversational, no headers/bullets unless listing.
 
 ### Tools
 
@@ -511,7 +533,8 @@ Tool results may contain Title, description, og:description, Content sections. T
 
 ### n8n building
 
-Prefer n8n_quick_workflow — simple params, server builds valid JSON. Examples:
+Prefer n8n_quick_workflow — simple params, server builds valid JSON. Triggers: "schedule", "webhook", or "manual" (user clicks Run in n8n — perfect for test/demo flows). Examples:
+- Basic test: { name:"Test", trigger:"manual", steps:[{ kind:"set", field:"message", value:"Hello from n8n" }] }
 - Hourly ping: { name:"Hourly ping", trigger:"schedule", every_hours:1, steps:[{ kind:"http", url:"https://httpbin.org/get" }] }
 - Webhook LLM: { name:"Ask", trigger:"webhook", webhook_path:"ask", steps:[{ kind:"llm", prompt:"{{$json.body.question}}" }] }
 - Daily digest: { name:"Daily", trigger:"schedule", every_hours:24, steps:[{ kind:"llm", prompt:"motivational quote" }, { kind:"email", to:"me@x.com", subject:"Quote", text:"{{$json.response}}" }] }
