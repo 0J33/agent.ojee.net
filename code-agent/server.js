@@ -177,6 +177,13 @@ app.get('/api/history/:project/:id', auth, (req, res) => {
   try {
     const lines = fs.readFileSync(filePath, 'utf8').trim().split('\n').filter(Boolean);
     const messages = [];
+    let cwd = null;
+    for (const line of lines) {
+      try {
+        const e = JSON.parse(line);
+        if (!cwd && e.cwd && typeof e.cwd === 'string') cwd = e.cwd;
+      } catch {}
+    }
     for (const line of lines) {
       try {
         const evt = JSON.parse(line);
@@ -193,8 +200,31 @@ app.get('/api/history/:project/:id', auth, (req, res) => {
         }
       } catch {}
     }
-    res.json({ messages });
+    res.json({ messages, cwd });
   } catch (e) { res.status(500).json({ error: String(e.message || e) }); }
+});
+
+// Resume an existing conversation by registering it in the active sessions map.
+// Used by the dashboard to "continue" a past chat from the history browser.
+app.post('/api/sessions/resume', auth, (req, res) => {
+  const id = (req.body.id || '').toString();
+  const cwd = req.body.cwd ? path.resolve(req.body.cwd) : null;
+  const title = (req.body.title || (cwd ? path.basename(cwd) : 'Resumed')).toString().slice(0, 80);
+  if (!id) return res.status(400).json({ error: 'id required' });
+  if (!cwd || !safeExists(cwd) || !fs.statSync(cwd).isDirectory()) {
+    return res.status(400).json({ error: 'cwd must be an existing directory', cwd });
+  }
+  // If already registered, just refresh title and return it
+  let session = sessions.get(id);
+  if (!session) {
+    session = { id, cwd, title, createdAt: Date.now(), lastActivityAt: Date.now(), initialized: true };
+    sessions.set(id, session);
+  } else {
+    session.cwd = cwd;
+    session.title = title;
+    session.initialized = true;
+  }
+  res.json(session);
 });
 
 // ─── Send message → stream Claude's response as SSE ────────────────────

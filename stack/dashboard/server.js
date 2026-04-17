@@ -844,37 +844,12 @@ app.get('/api/code-agent/sessions/:id/stream', auth, async (req, res) => {
   }
 });
 
-// Past conversation history
-app.get('/api/code-agent/history', auth, async (req, res) => {
-  try { const r = await codeAgentReq('/api/history'); res.status(r.status).json(await r.json()); }
-  catch (e) { res.status(500).json({ error: String(e.message || e) }); }
-});
-
-app.get('/api/code-agent/history/:project/:id', auth, async (req, res) => {
-  try { const r = await codeAgentReq(`/api/history/${encodeURIComponent(req.params.project)}/${encodeURIComponent(req.params.id)}`); res.status(r.status).json(await r.json()); }
-  catch (e) { res.status(500).json({ error: String(e.message || e) }); }
-});
-
-app.delete('/api/code-agent/history/:project/:id', auth, async (req, res) => {
-  try { const r = await codeAgentReq(`/api/history/${encodeURIComponent(req.params.project)}/${encodeURIComponent(req.params.id)}`, { method: 'DELETE' }); res.status(r.status).json(await r.json()); }
-  catch (e) { res.status(500).json({ error: String(e.message || e) }); }
-});
-
-// Reconnect to active Claude Code stream
-app.get('/api/code-agent/sessions/:id/stream', auth, async (req, res) => {
-  if (!codeAgentUp()) return res.status(503).json({ error: 'code agent not configured' });
+// Resume a past conversation
+app.post('/api/code-agent/sessions/resume', auth, async (req, res) => {
   try {
-    const upstream = await fetch(`${CODE_AGENT_URL}/api/sessions/${req.params.id}/stream`, {
-      headers: { Authorization: `Bearer ${CODE_AGENT_TOKEN}` }
-    });
-    if (upstream.status === 404) return res.status(404).json({ error: 'no active stream' });
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    upstream.body.on('data', chunk => res.write(chunk));
-    upstream.body.on('end', () => res.end());
-    upstream.body.on('error', () => res.end());
-  } catch (e) { res.status(502).json({ error: String(e.message || e) }); }
+    const r = await codeAgentReq('/api/sessions/resume', { method: 'POST', body: JSON.stringify(req.body || {}) });
+    res.status(r.status).json(await r.json());
+  } catch (e) { res.status(500).json({ error: String(e.message || e) }); }
 });
 
 // Message endpoint: stream SSE from loq through to our client.

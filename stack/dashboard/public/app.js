@@ -854,10 +854,31 @@ const caLoadHistory = async () => {
 const caViewHistory = async (conv) => {
   state.codeAgent.historyView = conv;
   state.codeAgent.historyMessages = [];
+  state.codeAgent.historyCwd = null;
   render();
   const data = await api(`/api/code-agent/history/${encodeURIComponent(conv.project)}/${encodeURIComponent(conv.id)}`);
   state.codeAgent.historyMessages = data?.messages || [];
+  state.codeAgent.historyCwd = data?.cwd || null;
   render();
+};
+
+const caContinue = async () => {
+  const conv = state.codeAgent.historyView;
+  const cwd = state.codeAgent.historyCwd;
+  if (!conv || !cwd) { alert('Could not determine the original directory for this conversation.'); return; }
+  const r = await api('/api/code-agent/sessions/resume', {
+    method: 'POST',
+    body: JSON.stringify({ id: conv.id, cwd, title: conv.title.slice(0, 60) })
+  });
+  if (!r || r.error) { alert('Resume failed: ' + (r?.error || 'unknown')); return; }
+  // Switch to the session chat with the past messages pre-loaded
+  state.codeAgent.active = r.id;
+  state.codeAgent.messages = state.codeAgent.historyMessages.slice();
+  state.codeAgent.historyOpen = false;
+  state.codeAgent.historyView = null;
+  state.codeAgent.historyMessages = [];
+  persistCode();
+  await caRefreshSessions();
 };
 
 const caDeleteHistory = async (conv, e) => {
@@ -918,9 +939,14 @@ const panelCodeAgent = () => {
       });
       return el('div', { class: 'panel' },
         el('div', { class: 'panel-head' }, 'History'),
-        el('button', { class: 'btn sm', onclick: () => { ca.historyView = null; ca.historyMessages = []; render(); } }, '\u2190 Back'),
+        el('div', { class: 'btn-row' },
+          el('button', { class: 'btn sm', onclick: () => { ca.historyView = null; ca.historyMessages = []; ca.historyCwd = null; render(); } }, '\u2190 Back'),
+          ca.historyCwd
+            ? el('button', { class: 'btn sm primary', onclick: caContinue, title: 'Resume this conversation and send new messages' }, 'Continue \u2192')
+            : null
+        ),
         el('div', { class: 'ca-hist-title' }, ca.historyView.title),
-        el('div', { class: 'ca-hist-meta' }, `Project: ${ca.historyView.project} \u00B7 ${ca.historyView.messageCount} events`),
+        el('div', { class: 'ca-hist-meta' }, `Project: ${ca.historyView.project} \u00B7 ${ca.historyView.messageCount} events` + (ca.historyCwd ? ` \u00B7 ${ca.historyCwd}` : '')),
         el('div', { class: 'chat-wrap' },
           el('div', { class: 'chat-log' }, ...msgs)
         )
