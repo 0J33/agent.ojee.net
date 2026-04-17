@@ -192,6 +192,32 @@ const restoreChat = () => {
   } catch {}
 };
 
+const persistCode = () => {
+  try {
+    localStorage.setItem('code_state', JSON.stringify({
+      active: state.codeAgent.active,
+      messages: state.codeAgent.messages,
+      busy: state.codeAgent.busy,
+      startTs: state.codeAgent.startTs || null,
+    }));
+  } catch {}
+};
+
+const restoreCode = () => {
+  try {
+    const saved = JSON.parse(localStorage.getItem('code_state'));
+    if (saved && saved.active) {
+      state.codeAgent.active = saved.active;
+      state.codeAgent.messages = saved.messages || [];
+      if (saved.busy) {
+        state.codeAgent.busy = true;
+        state.codeAgent.startTs = saved.startTs || null;
+        state.codeAgent.status = 'reconnecting';
+      }
+    }
+  } catch {}
+};
+
 window.addEventListener('hashchange', () => {
   state.view = location.hash.replace(/^#\/?/, '') || 'dashboard';
   render();
@@ -651,6 +677,7 @@ const caOpenHere = async () => {
     state.codeAgent.active = d.id;
     state.codeAgent.messages = [];
     state.codeAgent.pickerOpen = false;
+    persistCode();
     await caRefreshSessions();
   }
 };
@@ -658,9 +685,11 @@ const caOpenHere = async () => {
 const caSelect = async (id) => {
   state.codeAgent.active = id;
   state.codeAgent.messages = [];
+  persistCode();
   render();
   const h = await api(`/api/code-agent/sessions/${id}/history`);
   if (h?.messages) state.codeAgent.messages = h.messages;
+  persistCode();
   render();
 };
 
@@ -668,8 +697,83 @@ const caClose = async (id, e) => {
   if (e) e.stopPropagation();
   if (!confirm('Close this session? (Claude history is kept on disk.)')) return;
   await api(`/api/code-agent/sessions/${id}`, { method: 'DELETE' });
-  if (state.codeAgent.active === id) { state.codeAgent.active = null; state.codeAgent.messages = []; }
+  if (state.codeAgent.active === id) {
+    state.codeAgent.active = null;
+    state.codeAgent.messages = [];
+    state.codeAgent.busy = false;
+    persistCode();
+  }
   await caRefreshSessions();
+};
+
+// Reconnect to a code-agent session that was still streaming when the tab closed.
+// If the child process is gone (404), just mark done and keep what's in messages.
+const caReconnect = async (id) => {
+  try {
+    const r = await fetch(`/api/code-agent/sessions/${id}/stream`, { headers: headers() });
+    if (!r.ok) {
+      state.codeAgent.busy = false;
+      state.codeAgent.status = null;
+      state.codeAgent.startTs = null;
+      const last = state.codeAgent.messages[state.codeAgent.messages.length - 1];
+      if (last && last.role === 'assistant' && !last.text) last.text = '*(session ended while disconnected)*';
+      persistCode();
+      render();
+      return;
+    }
+    render();
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    const ensureLastAssistant = () => {
+      const last = state.codeAgent.messages[state.codeAgent.messages.length - 1];
+      if (!last || last.role !== 'assistant') {
+        state.codeAgent.messages.push({ role: 'assistant', text: '', ts: Date.now(), elapsed_ms: null });
+      }
+    };
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop() || '';
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const p = line.slice(6);
+        if (p === '[DONE]') continue;
+        try {
+          const evt = JSON.parse(p);
+          if (evt.type === 'text') {
+            ensureLastAssistant();
+            state.codeAgent.messages[state.codeAgent.messages.length - 1].text += evt.text;
+            state.codeAgent.status = 'typing';
+          } else if (evt.type === 'tool_use') {
+            state.codeAgent.messages.push({ role: 'tool_use', tool: evt.tool, input: evt.input, ts: Date.now() });
+            state.codeAgent.messages.push({ role: 'assistant', text: '', ts: Date.now(), elapsed_ms: null });
+            state.codeAgent.status = `running ${evt.tool}`;
+          } else if (evt.type === 'tool_result') {
+            state.codeAgent.status = 'thinking';
+          } else if (evt.type === 'result') {
+            state.codeAgent.status = evt.is_error ? 'error' : null;
+          }
+          persistCode();
+          render();
+        } catch {}
+      }
+    }
+  } catch {}
+  while (state.codeAgent.messages.length && state.codeAgent.messages[state.codeAgent.messages.length - 1].role === 'assistant' && !state.codeAgent.messages[state.codeAgent.messages.length - 1].text) {
+    state.codeAgent.messages.pop();
+  }
+  for (let i = state.codeAgent.messages.length - 1; i >= 0; i--) {
+    const m = state.codeAgent.messages[i];
+    if (m.role === 'assistant' && m.ts && m.elapsed_ms == null) { m.elapsed_ms = Date.now() - m.ts; break; }
+  }
+  state.codeAgent.busy = false;
+  state.codeAgent.status = null;
+  state.codeAgent.startTs = null;
+  persistCode();
+  render();
 };
 
 const caSend = async (text) => {
@@ -680,6 +784,8 @@ const caSend = async (text) => {
   state.codeAgent.messages.push({ role: 'assistant', text: '', ts: now, elapsed_ms: null });
   state.codeAgent.busy = true;
   state.codeAgent.status = 'thinking';
+  state.codeAgent.startTs = now;
+  persistCode();
   render();
   try {
     const r = await fetch(`/api/code-agent/sessions/${state.codeAgent.active}/messages`, {
@@ -703,8 +809,8 @@ const caSend = async (text) => {
         try {
           const evt = JSON.parse(p);
           const last = state.codeAgent.messages[state.codeAgent.messages.length - 1];
-          if (evt.type === 'text') { last.text += evt.text; state.codeAgent.status = 'typing'; render(); }
-          else if (evt.type === 'tool_use') { state.codeAgent.messages.push({ role: 'tool_use', tool: evt.tool, input: evt.input, ts: Date.now() }); state.codeAgent.messages.push({ role: 'assistant', text: '', ts: Date.now(), elapsed_ms: null }); state.codeAgent.status = `running ${evt.tool}`; render(); }
+          if (evt.type === 'text') { last.text += evt.text; state.codeAgent.status = 'typing'; persistCode(); render(); }
+          else if (evt.type === 'tool_use') { state.codeAgent.messages.push({ role: 'tool_use', tool: evt.tool, input: evt.input, ts: Date.now() }); state.codeAgent.messages.push({ role: 'assistant', text: '', ts: Date.now(), elapsed_ms: null }); state.codeAgent.status = `running ${evt.tool}`; persistCode(); render(); }
           else if (evt.type === 'tool_result') { state.codeAgent.status = 'thinking'; render(); }
           else if (evt.type === 'result') { state.codeAgent.status = evt.is_error ? 'error' : null; }
         } catch {}
@@ -726,6 +832,8 @@ const caSend = async (text) => {
   state.codeAgent.busy = false;
   state.codeAgent.status = null;
   state.codeAgent.abort = null;
+  state.codeAgent.startTs = null;
+  persistCode();
   render();
 };
 
@@ -873,14 +981,17 @@ const panelCodeAgent = () => {
       el('div', { class: 'chat-log' }, ...msgs),
       el('div', { class: 'chat-form' },
         input,
+        ca.busy ? el('button', {
+          class: 'btn chat-send chat-stop',
+          onclick: () => ca.abort?.abort()
+        }, 'Stop') : null,
         el('button', {
-          class: 'btn primary chat-send' + (ca.busy ? ' chat-stop' : ''),
+          class: 'btn primary chat-send',
           onclick: () => {
-            if (ca.busy) { ca.abort?.abort(); return; }
             const v = input.value.trim();
             if (v) { input.value = ''; caSend(v); }
           }
-        }, ca.busy ? 'Stop' : 'Send')
+        }, 'Send')
       )
     ) : null
   );
@@ -907,10 +1018,16 @@ const startLiveTimer = () => {
 
 // ─── Render (preserves scroll positions + chat input) ────────────────────
 const render = () => {
+  // Preserve any .chat-input's value across renders, even when it isn't the
+  // focused element (e.g. user clicked Stop — focus moves to the button, but
+  // their drafted next message should survive the re-render).
+  const oldInput = document.querySelector('.chat-input');
   const active = document.activeElement;
-  const wasChatInput = active && active.classList && active.classList.contains('chat-input');
-  const preserved = wasChatInput ? {
-    value: active.value, start: active.selectionStart, end: active.selectionEnd,
+  const preserved = oldInput ? {
+    value: oldInput.value,
+    start: oldInput.selectionStart,
+    end: oldInput.selectionEnd,
+    focused: oldInput === active,
   } : null;
 
   // If a <select> dropdown is currently open (focused), defer the re-render
@@ -939,8 +1056,10 @@ const render = () => {
     const newInput = document.querySelector('.chat-input');
     if (newInput) {
       newInput.value = preserved.value;
-      newInput.focus();
-      try { newInput.setSelectionRange(preserved.start, preserved.end); } catch {}
+      if (preserved.focused) {
+        newInput.focus();
+        try { newInput.setSelectionRange(preserved.start, preserved.end); } catch {}
+      }
       newInput.style.height = 'auto';
       newInput.style.height = Math.min(newInput.scrollHeight, 160) + 'px';
     }
@@ -1074,6 +1193,7 @@ const refresh = async () => {
 // ─── Boot ───────────────────────────────────────────────────────────────
 const boot = async () => {
   restoreChat();
+  restoreCode();
   await loadSavedChats();
   render();
   refresh();
@@ -1082,6 +1202,18 @@ const boot = async () => {
   // Reconnect to active background job if tab was closed/refreshed
   if (state.chatBusy && state.chatJobId) {
     reconnectChatJob(state.chatJobId);
+  }
+  // Code-agent: if we had a session, refresh history + reattach if busy
+  if (state.codeAgent.active) {
+    try {
+      const h = await api(`/api/code-agent/sessions/${state.codeAgent.active}/history`);
+      if (h?.messages && h.messages.length >= state.codeAgent.messages.length) {
+        state.codeAgent.messages = h.messages;
+        persistCode();
+        render();
+      }
+    } catch {}
+    if (state.codeAgent.busy) caReconnect(state.codeAgent.active);
   }
 };
 
