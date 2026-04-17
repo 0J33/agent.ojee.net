@@ -130,6 +130,14 @@ button { cursor: pointer; }
 .chat-send { min-width: 60px; min-height: 32px; padding: 8px 12px; font-size: 0.65rem; }
 .chat-send.chat-stop { background: #e74c3c; border-color: #e74c3c; color: #fff; }
 .chat-send.chat-stop:hover:not(:disabled) { background: #ff6a5a; border-color: #ff6a5a; }
+.chat-chips { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 6px; }
+.chat-chip { display: inline-flex; align-items: center; gap: 4px; font-size: 0.58rem; font-weight: 600; padding: 2px 7px 2px 6px; border-radius: 10px; letter-spacing: 0.03em; white-space: nowrap; }
+.chat-chip .chip-icon { display: inline-flex; align-items: center; }
+.chat-chip .chip-icon svg { display: block; }
+.chip-model { background: rgba(0, 170, 170, 0.14); color: var(--accent); border: 1px solid rgba(0, 170, 170, 0.35); }
+.chip-tool  { background: rgba(120, 140, 180, 0.08); color: #bcd; border: 1px solid rgba(140, 170, 210, 0.22); }
+.chip-status { background: rgba(255, 180, 60, 0.08); color: #f0c070; border: 1px solid rgba(255, 180, 60, 0.25); }
+.chip-status .chip-icon svg { animation: none; }
 
 /* ─── Typing ─── */
 .typing-dots { display: inline-flex; gap: 3px; font-size: 0.5rem; color: var(--accent); letter-spacing: 2px; }

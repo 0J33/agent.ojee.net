@@ -303,6 +303,40 @@ const typingDots = () => el('span', { class: 'typing-dots' },
   el('span', {}, '●'), el('span', {}, '●'), el('span', {}, '●')
 );
 
+// Inline SVG paths keyed by chip kind (all 14x14, currentColor stroke/fill).
+const SVG_PATHS = {
+  model:       '<path d="M9 3h6v2h2a2 2 0 0 1 2 2v2h2v2h-2v2h2v2h-2v2a2 2 0 0 1-2 2h-2v2H9v-2H7a2 2 0 0 1-2-2v-2H3v-2h2v-2H3v-2h2V7a2 2 0 0 1 2-2h2V3zm0 6v6h6V9H9z"/>',
+  web_search:  '<circle cx="10" cy="10" r="5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M14 14l5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>',
+  web_fetch:   '<path d="M12 3v10m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
+  get_stats:   '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+  get_services:'<rect x="3" y="3" width="7" height="7" rx="1" fill="none" stroke="currentColor" stroke-width="2"/><rect x="14" y="3" width="7" height="7" rx="1" fill="none" stroke="currentColor" stroke-width="2"/><rect x="3" y="14" width="7" height="7" rx="1" fill="none" stroke="currentColor" stroke-width="2"/><rect x="14" y="14" width="7" height="7" rx="1" fill="none" stroke="currentColor" stroke-width="2"/>',
+  list_models: '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+  read_file:   '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M14 2v6h6M8 13h8M8 17h8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+  list_dir:    '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>',
+  status:      '<circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2" stroke-dasharray="12 6" stroke-linecap="round"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1.2s" repeatCount="indefinite"/></circle>'
+};
+const svgChip = (kind) => {
+  const key = SVG_PATHS[kind] ? kind : 'model';
+  const wrap = el('span', { class: 'chip-icon', html: `<svg viewBox="0 0 24 24" width="12" height="12">${SVG_PATHS[key]}</svg>` });
+  return wrap;
+};
+const TOOL_LABELS = {
+  web_search: 'Web search',
+  web_fetch: 'Web page',
+  get_stats: 'System stats',
+  get_services: 'Services',
+  list_models: 'Models',
+  read_file: 'File read',
+  list_dir: 'Directory'
+};
+const chipLabel = (kind, raw) => kind === 'tool' ? (TOOL_LABELS[raw] || raw.replace(/_/g, ' ')) : raw;
+const chip = (kind, raw, icon) => {
+  const label = chipLabel(kind, raw);
+  return el('span', { class: `chat-chip chip-${kind}`, title: raw },
+    icon, el('span', { class: 'chip-label' }, label)
+  );
+};
+
 const panelChat = () => {
   const lastIdx = state.chat.length - 1;
 
@@ -311,10 +345,6 @@ const panelChat = () => {
     : state.chat.map((m, i) => {
       const isLast = i === lastIdx;
       const streaming = isLast && m.role === 'assistant' && state.chatBusy;
-      const statusText = state.chatStatus && state.chatStatus !== 'typing' ? state.chatStatus : (m.content ? 'typing' : 'thinking');
-      const label = m.role === 'assistant' && streaming
-        ? `${state.chatModel} · ${statusText}…`
-        : m.role;
       const bodyEl = el('div', { class: 'md-body' });
       if (streaming && !m.content) {
         bodyEl.appendChild(typingDots());
@@ -327,10 +357,25 @@ const panelChat = () => {
       } else {
         bodyEl.textContent = m.content;
       }
-      return el('div', { class: m.role === 'user' ? 'chat-msg chat-user' : 'chat-msg chat-assistant' },
-        el('div', { class: 'chat-label' }, label),
-        bodyEl
+
+      if (m.role === 'user') {
+        return el('div', { class: 'chat-msg chat-user' },
+          el('div', { class: 'chat-label' }, 'user'),
+          bodyEl
+        );
+      }
+
+      const model = m.model || state.chatModel;
+      const toolList = m.tools || [];
+      const statusText = !streaming ? null
+        : (state.chatStatus && state.chatStatus.startsWith('searching') ? state.chatStatus
+        : (m.content ? 'typing' : 'thinking'));
+      const chipRow = el('div', { class: 'chat-chips' },
+        model ? chip('model', model, svgChip('model')) : null,
+        ...toolList.map(t => chip('tool', t, svgChip(t))),
+        statusText ? chip('status', statusText + '…', svgChip('status')) : null
       );
+      return el('div', { class: 'chat-msg chat-assistant' }, chipRow, bodyEl);
     });
 
   const log = el('div', { class: 'chat-log' }, ...logChildren);
@@ -349,7 +394,7 @@ const panelChat = () => {
     const text = input.value.trim();
     if (!text || state.chatBusy || !state.chatModel) return;
     state.chat.push({ role: 'user', content: text });
-    state.chat.push({ role: 'assistant', content: '' });
+    state.chat.push({ role: 'assistant', content: '', model: state.chatModel, tools: [] });
     state.chatBusy = true;
     state.chatStatus = 'thinking';
     state.chatDirty = true;
@@ -389,6 +434,9 @@ const panelChat = () => {
               render();
             } else if (j.tool_call) {
               state.chatStatus = `searching · ${j.tool_call.name.replace(/^(get|list|read|web)_/, '')}`;
+              const last = state.chat[state.chat.length - 1];
+              if (!last.tools) last.tools = [];
+              if (!last.tools.includes(j.tool_call.name)) last.tools.push(j.tool_call.name);
               render();
             } else if (j.tool_result) {
               state.chatStatus = 'thinking';
@@ -475,7 +523,13 @@ const render = () => {
     value: active.value, start: active.selectionStart, end: active.selectionEnd,
   } : null;
 
+  // If a <select> dropdown is currently open (focused), defer the re-render
+  // so we don't snap it shut during the 5s stats poll. The next tick (or the
+  // next user action that calls render()) will redraw once it's closed.
+  if (document.activeElement && document.activeElement.tagName === 'SELECT') return;
+
   const oldLog = document.querySelector('.chat-log');
+  const prevScroll = oldLog ? oldLog.scrollTop : 0;
   const stickToBottom = oldLog ? (oldLog.scrollHeight - oldLog.scrollTop - oldLog.clientHeight < 60) : true;
 
   document.body.innerHTML = '';
@@ -504,7 +558,7 @@ const render = () => {
   }
 
   const newLog = document.querySelector('.chat-log');
-  if (newLog && stickToBottom) newLog.scrollTop = newLog.scrollHeight;
+  if (newLog) newLog.scrollTop = stickToBottom ? newLog.scrollHeight : prevScroll;
 };
 
 // ─── Polling ────────────────────────────────────────────────────────────

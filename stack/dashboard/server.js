@@ -142,6 +142,26 @@ const stripHtml = (s) => s
   .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
   .replace(/\s+/g, ' ').trim();
 
+// Extract the meaty parts of an HTML page: title, meta description, og:*,
+// then body text. Preserves info from JS-rendered SPAs that only have meta.
+const extractPage = (html) => {
+  const title = (html.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [, ''])[1].trim();
+  const metaRe = /<meta\s+(?:name|property)\s*=\s*["']([^"']+)["']\s+content\s*=\s*["']([^"']*)["']/gi;
+  const meta = {};
+  let m; while ((m = metaRe.exec(html))) {
+    if (!meta[m[1]]) meta[m[1]] = m[2].trim();
+  }
+  const body = stripHtml(html);
+  const parts = [];
+  if (title) parts.push(`Title: ${title}`);
+  const descKeys = ['description', 'og:description', 'twitter:description'];
+  for (const k of descKeys) if (meta[k] && !parts.some(p => p.includes(meta[k]))) { parts.push(`${k}: ${meta[k]}`); break; }
+  const otherMeta = ['og:title', 'og:site_name', 'author', 'keywords', 'og:type'];
+  for (const k of otherMeta) if (meta[k]) parts.push(`${k}: ${meta[k]}`);
+  if (body && body.length > 20) parts.push(`Content: ${body}`);
+  return parts.join('\n');
+};
+
 const hostPath = (p) => {
   if (!p || typeof p !== 'string') throw new Error('path required');
   if (!p.startsWith('/')) throw new Error('path must be absolute');
@@ -178,7 +198,7 @@ const runTool = async (name, args) => {
     await Promise.all(results.slice(0, 2).map(async (res) => {
       try {
         const r2 = await fetch(res.url, { headers: { 'User-Agent': 'Mozilla/5.0' }, timeout: 6000 });
-        const full = stripHtml(await r2.text());
+        const full = extractPage(await r2.text());
         let best = '';
         for (const kw of keywords) {
           const idx = full.toLowerCase().indexOf(kw);
@@ -187,15 +207,15 @@ const runTool = async (name, args) => {
             break;
           }
         }
-        res.content = (best ? `[key excerpt] ${best}\n\n[full page] ` : '') + full.slice(0, best ? 1800 : 3000);
+        res.content = (best ? `[key excerpt] ${best}\n\n` : '') + full.slice(0, best ? 1800 : 3000);
       } catch { res.content = '(fetch failed)'; }
     }));
     return results;
   }
   if (name === 'web_fetch') {
     const r = await fetch(args.url, { headers: { 'User-Agent': 'Mozilla/5.0' }, timeout: 20000 });
-    const text = stripHtml(await r.text());
-    return text.slice(0, 15000);
+    const text = extractPage(await r.text());
+    return text.slice(0, 15000) || '(page has no extractable text)';
   }
   if (name === 'get_stats') {
     const [cpu, mem, disk, temp, gpu, os, load] = await Promise.all([
@@ -262,6 +282,20 @@ Tools available (use silently — do not announce them):
 CORE RULE — no hallucination:
 Never invent facts. For anything factual that could have changed or you're not 100% sure about, use a tool to verify. If a tool gives no useful result, honestly say "I don't know" or "I couldn't find that" — do NOT guess.
 
+Specific anti-hallucination rules:
+- NEVER invent a name, identity, address, or biographical detail from search snippets unless the snippet explicitly and clearly states it about the exact entity asked about. If snippets are ambiguous or about different people with similar names, say so — do not pick one.
+- When the user corrects you, do NOT swing to a completely different made-up answer. Instead: re-check the tool result, and if you still can't find clear info, admit it.
+- If the user says "that is me" or similar, do not then re-describe them with different details. Simply accept and continue.
+
+URL / domain queries — use web_fetch, not web_search:
+- If the user mentions a specific domain or URL (e.g. "ojee.net", "example.com/path", "github.com/foo/bar"), call web_fetch with "https://" + the domain/path. Do NOT search for it — fetch it directly to see the actual site content.
+- Only fall back to web_search if the fetch fails or the site has no meaningful text.
+
+Reading web_fetch / web_search results:
+- Results contain lines like "Title:", "description:", "og:description:", "Content:". These ARE the page's info — USE them.
+- If "description:" says "CSEN graduate, programmer, and engineer" — the answer is "they are a CSEN graduate who works as a programmer and engineer." Don't say "I couldn't find info" when a description is right there.
+- JS-only SPAs often have meaningful meta tags and little body text. Meta tags are just as valid as body text.
+
 What to search (web_search) — anything about the current world:
 - Time in a city, date, weather, news, prices, sports, release dates, versions
 - Any named person / place / product / event where freshness matters
@@ -277,7 +311,15 @@ What you may answer from memory (no tool):
 - General reasoning and advice.
 If you feel any doubt even about these — search or say you don't know.
 
+IMPORTANT — always search for these (even if you think you know):
+- Entry/admission requirements for any university, school, or program.
+- Policies, prices, specs, or features of specific companies/products.
+- Anything about a specific named institution, organization, product, or regulation.
+Users asking about these want the REAL current answer, not your trained guess. Search first.
+
 How to respond:
+- NEVER refuse to answer. For medical, legal, financial, or other sensitive topics, give the most informative answer you can (using web_search when helpful) and add a single-line disclaimer at the end like "This is general information, not a substitute for professional advice." Do NOT say "I can't help with that" or redirect the user to a professional without first giving the actual answer.
+- NEVER ask permission to use a tool. Never say "let me know when you're ready" or "I'll proceed if you want" or "would you like me to search". Just call the tool. The user already asked the question — answer it.
 - When calling a tool: emit ONE tool call, nothing else. No prose, no "let me search", no JSON inside text.
 - After a tool result: answer plainly. Don't say "I searched" or "according to the web" — just state it.
 - 1-3 sentences, conversational. No markdown unless the user asks for a list/code/table.
