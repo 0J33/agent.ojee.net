@@ -316,8 +316,21 @@ const TOOLS = [
   } }
 ];
 
-const runTool = async (name, args) => {
+// Normalize tool args across model quirks:
+//  - hermes3 emits {queries:["..."]} instead of {query:"..."}
+//  - some models use {urls:[...]} instead of {url:"..."}
+const normalizeArgs = (args) => {
   args = args || {};
+  if (!args.query && args.queries) args.query = Array.isArray(args.queries) ? args.queries[0] : args.queries;
+  if (!args.query && args.q) args.query = args.q;
+  if (!args.url && args.urls) args.url = Array.isArray(args.urls) ? args.urls[0] : args.urls;
+  if (!args.path && args.paths) args.path = Array.isArray(args.paths) ? args.paths[0] : args.paths;
+  if (!args.path && args.file_path) args.path = args.file_path;
+  return args;
+};
+
+const runTool = async (name, args) => {
+  args = normalizeArgs(args);
   if (name === 'web_search') {
     const q = encodeURIComponent(args.query || '');
     const r = await fetch(`https://html.duckduckgo.com/html/?q=${q}`, { headers: { 'User-Agent': 'Mozilla/5.0' } });
