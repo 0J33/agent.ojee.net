@@ -388,11 +388,7 @@ const panelChat = () => {
               state.chat[state.chat.length - 1].content += j.message.content;
               render();
             } else if (j.tool_call) {
-              state.chatStatus = `calling ${j.tool_call.name}`;
-              const args = j.tool_call.args || {};
-              const argStr = Object.entries(args).map(([k, v]) => `${k}: ${JSON.stringify(v).slice(0, 60)}`).join(', ');
-              const line = `\n\n\`⚙ ${j.tool_call.name}(${argStr})\`\n`;
-              state.chat[state.chat.length - 1].content += line;
+              state.chatStatus = `searching · ${j.tool_call.name.replace(/^(get|list|read|web)_/, '')}`;
               render();
             } else if (j.tool_result) {
               state.chatStatus = 'thinking';
@@ -524,7 +520,11 @@ const refresh = async () => {
   if (services) state.services = services;
   if (models?.models) {
     state.models = models.models;
-    if (!state.chatModel && models.models.length) state.chatModel = models.models[0].name;
+    if (!state.chatModel && models.models.length) {
+      const preferred = ['llama3.1:8b', 'llama3.2:3b', 'qwen2.5:7b'];
+      const pick = preferred.map(p => models.models.find(m => m.name === p)).find(Boolean);
+      state.chatModel = (pick || models.models[0]).name;
+    }
   }
   if (pull) state.pull = pull.lines;
   render();

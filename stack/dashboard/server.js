@@ -230,23 +230,21 @@ app.post('/api/chat', auth, async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
   const conv = [
-    { role: 'system', content: `You are a helpful assistant running on the user's self-hosted Linux server (Zorin OS, agent.ojee.net). You HAVE these tools — you are NOT a plain offline model:
+    { role: 'system', content: `You are a friendly, conversational assistant on the user's self-hosted Linux server (Zorin OS, agent.ojee.net). Respond like a human — natural sentences, no headers, no bullet points unless truly listing things.
 
-- web_search(query) — DuckDuckGo search. YOU HAVE INTERNET ACCESS via this.
-- web_fetch(url) — fetch text of a URL.
-- get_stats() — live CPU, RAM, disk, temp, GPU.
-- get_services() — docker compose services state.
-- list_models() — installed Ollama models.
-- read_file(path) / list_dir(path) — host filesystem, read-only. Stack is at /home/ojee/stack. Never read .env files.
+Tools available (use silently — do not announce them):
+- web_search(query), web_fetch(url) — you have internet via these.
+- get_stats() — CPU, RAM, disk, temp, GPU.
+- get_services() — docker services state.
+- list_models() — installed models.
+- read_file(path), list_dir(path) — host fs, read-only. Stack at /home/ojee/stack. Never read .env files.
 
-CRITICAL RULES:
-1. If asked "do you have internet / web access / real-time info" — answer YES and demonstrate by doing a web_search.
-2. ALWAYS call web_search for: current time in any city, weather, prices, news, recent events, sports scores, any "today/now/latest" question, any named entity you might be out of date on. Do NOT refuse with "I can't do real-time" — you CAN, use the tool.
-3. Use get_stats / get_services / list_models for any question about THIS server.
-4. Use read_file / list_dir for any question about files on this server.
-5. Only answer from memory for: general knowledge, math, code, definitions, timeless facts.
-6. You have NO write access and NO shell — for changes, direct the user to the dashboard buttons or /chat/ (Open WebUI).
-7. Keep answers concise. After a tool result, summarize in 1-3 sentences.` },
+How to behave:
+- Use a tool for current time/weather/prices/news/recent info, server state, or file contents. Use from memory for general knowledge, math, definitions.
+- When you decide to use a tool: emit ONE tool call, nothing else — no prose before or after, no "let me search", no JSON in your text reply. The system handles it and you'll see the result next turn.
+- When you have the result: answer the user in plain, conversational English. Don't mention that you "searched" or "used a tool" — just give the answer like a knowledgeable friend would.
+- Keep it short: 1-3 sentences for most answers. No markdown formatting unless the user explicitly wants a list/table/code.
+- You cannot change anything — no writes, no shell. For actions, point the user to the dashboard buttons, /chat/ (Open WebUI), or /flow/ (n8n).` },
     ...messages
   ];
   const MAX_ITER = 6;
@@ -262,13 +260,14 @@ CRITICAL RULES:
       const msg = data.message || {};
       let toolCalls = msg.tool_calls || [];
       let textOut = msg.content || '';
-      // Fallback: some models (qwen2.5-coder) emit tool calls as JSON in content
+      // Fallback: some models emit tool calls as JSON in content. Extract the
+      // first valid one, then strip ALL remaining JSON-looking blocks so the
+      // user never sees raw tool-call syntax.
       if (!toolCalls.length && textOut && textOut.includes('"name"')) {
-        const start = textOut.indexOf('{');
-        if (start >= 0) {
+        const extractJsonAt = (s, from) => {
           let depth = 0, end = -1, inStr = false, esc = false;
-          for (let i = start; i < textOut.length; i++) {
-            const c = textOut[i];
+          for (let i = from; i < s.length; i++) {
+            const c = s[i];
             if (esc) { esc = false; continue; }
             if (c === '\\') { esc = true; continue; }
             if (c === '"') { inStr = !inStr; continue; }
@@ -276,18 +275,29 @@ CRITICAL RULES:
             if (c === '{') depth++;
             else if (c === '}') { depth--; if (depth === 0) { end = i; break; } }
           }
-          if (end > start) {
-            try {
-              const parsed = JSON.parse(textOut.slice(start, end + 1));
-              if (parsed.name && TOOLS.some(t => t.function.name === parsed.name)) {
-                toolCalls = [{ function: { name: parsed.name, arguments: parsed.arguments || {} } }];
-                textOut = (textOut.slice(0, start) + textOut.slice(end + 1))
-                  .replace(/```[a-z]*\s*/gi, '').replace(/```/g, '').trim();
-              }
-            } catch {}
-          }
+          return end > from ? s.slice(from, end + 1) : null;
+        };
+        // Walk all {...} blocks, grab the first valid tool call
+        let cursor = 0;
+        while (cursor < textOut.length) {
+          const start = textOut.indexOf('{', cursor);
+          if (start < 0) break;
+          const block = extractJsonAt(textOut, start);
+          if (!block) break;
+          try {
+            const parsed = JSON.parse(block);
+            if (parsed.name && TOOLS.some(t => t.function.name === parsed.name)) {
+              toolCalls = [{ function: { name: parsed.name, arguments: parsed.arguments || {} } }];
+              break;
+            }
+          } catch {}
+          cursor = start + block.length;
         }
       }
+      // If we have any tool call at all, hide ALL prose + JSON — model was
+      // often narrating ("I'll search for...") or emitting multiple JSON blobs.
+      // The real answer comes on the next iteration after tool results.
+      if (toolCalls.length) textOut = '';
       conv.push({ role: 'assistant', content: textOut, tool_calls: toolCalls.length ? toolCalls : undefined });
       if (textOut) sseWrite(res, { message: { content: textOut } });
       if (!toolCalls.length) { res.write('data: [DONE]\n\n'); return res.end(); }
