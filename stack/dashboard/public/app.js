@@ -155,7 +155,7 @@ let state = {
   actionMsg: '',
   codeAgent: { enabled: false, sessions: [], active: null, messages: [], busy: false, status: null, abort: null,
     pickerOpen: false, pickerPath: '/media/ojee/NVME/Code/[GIT]/Claude', pickerEntries: [], pickerParent: null,
-    historyOpen: false, historyList: [], historyView: null, historyMessages: [] },
+    historyOpen: false, historyList: [], historyView: null, historyMessages: [], historyShowTools: false },
 };
 
 // ─── localStorage persistence ───────────────────────────────────────────
@@ -925,7 +925,11 @@ const panelCodeAgent = () => {
   if (ca.historyOpen) {
     if (ca.historyView) {
       // Viewing a specific past conversation
-      const msgs = ca.historyMessages.map(m => {
+      const filtered = ca.historyShowTools
+        ? ca.historyMessages
+        : ca.historyMessages.filter(m => m.role !== 'tool_use');
+      const toolCount = ca.historyMessages.filter(m => m.role === 'tool_use').length;
+      const msgs = filtered.map(m => {
         if (m.role === 'tool_use') {
           const input = typeof m.input === 'object' ? JSON.stringify(m.input).slice(0, 120) : String(m.input || '').slice(0, 120);
           return el('div', { class: 'ca-tool' }, svgChip('list_models'), el('span', {}, `${m.tool}(${input})`));
@@ -941,6 +945,10 @@ const panelCodeAgent = () => {
         el('div', { class: 'panel-head' }, 'History'),
         el('div', { class: 'btn-row' },
           el('button', { class: 'btn sm', onclick: () => { ca.historyView = null; ca.historyMessages = []; ca.historyCwd = null; render(); } }, '\u2190 Back'),
+          toolCount > 0
+            ? el('button', { class: 'btn sm', onclick: () => { ca.historyShowTools = !ca.historyShowTools; render(); }, title: 'Toggle tool call rows' },
+                ca.historyShowTools ? `Hide tools (${toolCount})` : `Show tools (${toolCount})`)
+            : null,
           ca.historyCwd
             ? el('button', { class: 'btn sm primary', onclick: caContinue, title: 'Resume this conversation and send new messages' }, 'Continue \u2192')
             : null
