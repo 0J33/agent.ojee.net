@@ -149,7 +149,7 @@ const hostPath = (p) => {
 };
 
 const TOOLS = [
-  { type: 'function', function: { name: 'web_search', description: 'Search the web via DuckDuckGo. Returns top 8 results as JSON array of {title, url, snippet}.', parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } } },
+  { type: 'function', function: { name: 'web_search', description: 'Search the web via DuckDuckGo and auto-fetch the top 2 result pages. Returns a JSON array where each item has {title, url, snippet, content} — content is the actual page text (HTML stripped, 3k char cap). Use this for ANY current/real-world fact: time, weather, news, prices, releases, people, places. If the content contains the answer, extract it. If not, say you don\'t know.', parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } } },
   { type: 'function', function: { name: 'web_fetch', description: 'Fetch a URL and return its text content (HTML stripped, 15k char cap).', parameters: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] } } },
   { type: 'function', function: { name: 'get_stats', description: 'Live system stats: CPU %, memory used/total, disk usage, CPU temperature, GPU info if present.', parameters: { type: 'object', properties: {} } } },
   { type: 'function', function: { name: 'get_services', description: 'Docker compose services in the agent stack and their running state.', parameters: { type: 'object', properties: {} } } },
@@ -166,11 +166,31 @@ const runTool = async (name, args) => {
     const html = await r.text();
     const results = [];
     const re = /<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<a[^>]*class="result__snippet"[^>]*>([\s\S]*?)<\/a>/g;
-    let m; while ((m = re.exec(html)) && results.length < 8) {
-      let url = decodeURIComponent(m[1].replace(/^\/\/duckduckgo\.com\/l\/\?uddg=/, '').replace(/&rut=.*$/, ''));
+    let m; while ((m = re.exec(html)) && results.length < 6) {
+      let url = decodeURIComponent(m[1].replace(/^\/\/duckduckgo\.com\/l\/\?uddg=/, '').replace(/&amp;/g, '&').replace(/[&?]rut=.*$/, ''));
       results.push({ title: stripHtml(m[2]), url, snippet: stripHtml(m[3]) });
     }
-    return results.length ? results : 'no results';
+    if (!results.length) return 'no results';
+    // Auto-fetch top 2 pages so model gets real content, not just snippets.
+    // Heuristic: surface answer-relevant paragraphs at the top (navigation
+    // menus on big sites push actual data too far down for 8B models).
+    const keywords = ['current local', 'current time', 'local time', 'currently', 'today is', 'time is', 'temperature', 'price of', 'cost of', 'now playing', 'latest'];
+    await Promise.all(results.slice(0, 2).map(async (res) => {
+      try {
+        const r2 = await fetch(res.url, { headers: { 'User-Agent': 'Mozilla/5.0' }, timeout: 6000 });
+        const full = stripHtml(await r2.text());
+        let best = '';
+        for (const kw of keywords) {
+          const idx = full.toLowerCase().indexOf(kw);
+          if (idx >= 0) {
+            best = full.slice(Math.max(0, idx - 40), idx + 400);
+            break;
+          }
+        }
+        res.content = (best ? `[key excerpt] ${best}\n\n[full page] ` : '') + full.slice(0, best ? 1800 : 3000);
+      } catch { res.content = '(fetch failed)'; }
+    }));
+    return results;
   }
   if (name === 'web_fetch') {
     const r = await fetch(args.url, { headers: { 'User-Agent': 'Mozilla/5.0' }, timeout: 20000 });
@@ -239,12 +259,29 @@ Tools available (use silently — do not announce them):
 - list_models() — installed models.
 - read_file(path), list_dir(path) — host fs, read-only. Stack at /home/ojee/stack. Never read .env files.
 
-How to behave:
-- Use a tool for current time/weather/prices/news/recent info, server state, or file contents. Use from memory for general knowledge, math, definitions.
-- When you decide to use a tool: emit ONE tool call, nothing else — no prose before or after, no "let me search", no JSON in your text reply. The system handles it and you'll see the result next turn.
-- When you have the result: answer the user in plain, conversational English. Don't mention that you "searched" or "used a tool" — just give the answer like a knowledgeable friend would.
-- Keep it short: 1-3 sentences for most answers. No markdown formatting unless the user explicitly wants a list/table/code.
-- You cannot change anything — no writes, no shell. For actions, point the user to the dashboard buttons, /chat/ (Open WebUI), or /flow/ (n8n).` },
+CORE RULE — no hallucination:
+Never invent facts. For anything factual that could have changed or you're not 100% sure about, use a tool to verify. If a tool gives no useful result, honestly say "I don't know" or "I couldn't find that" — do NOT guess.
+
+What to search (web_search) — anything about the current world:
+- Time in a city, date, weather, news, prices, sports, release dates, versions
+- Any named person / place / product / event where freshness matters
+
+What to call local tools for — anything about THIS server:
+- get_stats (CPU/RAM/disk/temp/GPU), get_services, list_models, read_file, list_dir
+
+What you may answer from memory (no tool):
+- Math, arithmetic, basic algebra. ("17 * 23" = 391, no search.)
+- Code, programming concepts, syntax.
+- Grammar, spelling, definitions, translations.
+- Timeless facts (history, science fundamentals, how things work).
+- General reasoning and advice.
+If you feel any doubt even about these — search or say you don't know.
+
+How to respond:
+- When calling a tool: emit ONE tool call, nothing else. No prose, no "let me search", no JSON inside text.
+- After a tool result: answer plainly. Don't say "I searched" or "according to the web" — just state it.
+- 1-3 sentences, conversational. No markdown unless the user asks for a list/code/table.
+- You have no write access — for actions, point the user to the dashboard buttons, /chat/, or /flow/.` },
     ...messages
   ];
   const MAX_ITER = 6;
