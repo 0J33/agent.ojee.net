@@ -118,16 +118,26 @@ app.get('/api/models', auth, async (req, res) => {
 
 app.get('/api/pull-progress', auth, (req, res) => {
   try {
-    const log = fs.readFileSync('/host-tmp/ollama-pull.log', 'utf8');
-    const all = log.trim().split('\n');
-    const dedup = [];
-    let prev = '';
+    const raw = fs.readFileSync('/host-tmp/ollama-pull.log', 'utf8');
+    // Ollama's TUI uses ANSI cursor codes (no newlines). Convert all ANSI
+    // escape sequences + carriage returns to newlines so we can split lines
+    // and dedupe the repeating progress frames.
+    const clean = raw
+      .replace(/\x1B\[[?\d;]*[a-zA-Z]/g, '\n')
+      .replace(/\r/g, '\n');
+    const all = clean.split('\n').map(l => l.trim()).filter(Boolean);
+    // Collapse by prefix — for each distinct prefix (pulling manifest,
+    // pulling <sha>, verifying, writing, success), keep only the latest frame.
+    const byPrefix = new Map();
+    const order = [];
     for (const line of all) {
-      // Strip leading timestamp and compare just the progress part
-      const key = line.replace(/^\d{2}:\d{2}:\d{2}\s+/, '');
-      if (key !== prev) { dedup.push(line); prev = key; }
+      const m = line.match(/^(pulling (?:manifest|[0-9a-f]+)|verifying[^:]*|writing[^:]*|downloading[^:]*|success)/i);
+      const prefix = m ? m[1].toLowerCase() : `__${line}`;
+      if (!byPrefix.has(prefix)) order.push(prefix);
+      byPrefix.set(prefix, line);
     }
-    res.json({ lines: dedup.slice(-8) });
+    const final = order.map(p => byPrefix.get(p));
+    res.json({ lines: final.slice(-8) });
   } catch {
     res.json({ lines: ['no active pull'] });
   }

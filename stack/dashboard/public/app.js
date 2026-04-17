@@ -531,6 +531,7 @@ const render = () => {
   const oldLog = document.querySelector('.chat-log');
   const prevScroll = oldLog ? oldLog.scrollTop : 0;
   const stickToBottom = oldLog ? (oldLog.scrollHeight - oldLog.scrollTop - oldLog.clientHeight < 60) : true;
+  const pageScrollY = window.scrollY || document.documentElement.scrollTop || 0;
 
   document.body.innerHTML = '';
   document.body.append(
@@ -559,6 +560,7 @@ const render = () => {
 
   const newLog = document.querySelector('.chat-log');
   if (newLog) newLog.scrollTop = stickToBottom ? newLog.scrollHeight : prevScroll;
+  if (pageScrollY) window.scrollTo(0, pageScrollY);
 };
 
 // ─── Polling ────────────────────────────────────────────────────────────
