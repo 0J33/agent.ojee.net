@@ -562,6 +562,15 @@ Tool results may contain Title, description, og:description, Content sections. T
 
 ONLY call n8n_* tools when the user EXPLICITLY asks to build, create, list, activate, or modify an n8n workflow. Words like "workflow", "automation", "cron job", "webhook", "schedule", "n8n", "build me", "set up" combined with an automation verb. Greetings ("hi", "hello"), questions, casual chat, or any unrelated request = do NOT call n8n_quick_workflow. If unsure, just chat back normally.
 
+ABSOLUTELY CRITICAL when user asks to "set up / create / build / make" an n8n workflow:
+- You MUST call n8n_quick_workflow. That is the ONLY correct response.
+- DO NOT write a step-by-step tutorial.
+- DO NOT describe how to drag nodes in the n8n UI.
+- DO NOT mention "click the + button" or "add a Start node" or similar manual instructions.
+- DO NOT say "Here's how you'd do it" or "You can follow these steps".
+- Emit a single n8n_quick_workflow tool call. The server creates the workflow. That's it.
+- If the user asks for "a basic workflow" without specifics, pick reasonable defaults: trigger "manual", one step with kind "set" that assigns some demo value. Do NOT ask the user for clarification — build something sensible and report the URL.
+
 When the user IS asking for a workflow, prefer n8n_quick_workflow. Triggers: "schedule", "webhook", or "manual". Examples of shape only (do not invoke unless user actually asks):
 - Schedule ping: trigger "schedule", every_hours N, step kind "http" with url
 - Webhook LLM: trigger "webhook", webhook_path "foo", step kind "llm" with a prompt

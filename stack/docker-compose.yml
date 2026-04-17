@@ -79,7 +79,7 @@ services:
       - ENABLE_RAG_LOCAL_WEB_FETCH=True
       - ENABLE_CODE_INTERPRETER=True
       - CODE_EXECUTION_ENGINE=pyodide
-      - DEFAULT_MODELS=hermes3:8b
+      - DEFAULT_MODELS=llama3.1:8b
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
