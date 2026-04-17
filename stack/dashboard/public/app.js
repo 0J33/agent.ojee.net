@@ -509,10 +509,12 @@ const panelChat = () => {
   const log = el('div', { class: 'chat-log' }, ...logChildren);
 
   const input = el('textarea', { class: 'chat-input', rows: '1', placeholder: state.chatModel ? 'Ask anything\u2026' : 'Pull a model first' });
+  input.value = localStorage.getItem('draft_main') || '';
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
   });
   input.addEventListener('input', () => {
+    localStorage.setItem('draft_main', input.value);
     input.style.height = 'auto';
     input.style.height = Math.min(input.scrollHeight, 160) + 'px';
   });
@@ -528,6 +530,7 @@ const panelChat = () => {
     state.chatDirty = true;
     state.chatStartTs = now;
     input.value = '';
+    localStorage.removeItem('draft_main');
     persistChat();
     render();
 
@@ -947,14 +950,19 @@ const panelCodeAgent = () => {
   });
 
   const input = el('textarea', { class: 'chat-input', rows: '1', placeholder: activeSession ? 'message Claude\u2026' : 'pick a session' });
+  input.value = localStorage.getItem('draft_code') || '';
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       const v = input.value.trim();
-      if (v) { input.value = ''; caSend(v); }
+      if (v) { input.value = ''; localStorage.removeItem('draft_code'); caSend(v); }
     }
   });
-  input.addEventListener('input', () => { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 160) + 'px'; });
+  input.addEventListener('input', () => {
+    localStorage.setItem('draft_code', input.value);
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 160) + 'px';
+  });
 
   const sessionTabs = ca.sessions.map(s =>
     el('div', { class: 'ca-sess' + (s.id === ca.active ? ' active' : ''), onclick: () => caSelect(s.id) },
@@ -989,7 +997,7 @@ const panelCodeAgent = () => {
           class: 'btn primary chat-send',
           onclick: () => {
             const v = input.value.trim();
-            if (v) { input.value = ''; caSend(v); }
+            if (v) { input.value = ''; localStorage.removeItem('draft_code'); caSend(v); }
           }
         }, 'Send')
       )
