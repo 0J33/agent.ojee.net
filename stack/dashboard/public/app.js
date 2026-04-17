@@ -1082,11 +1082,18 @@ const render = () => {
   // If a <select> dropdown is currently open (focused), defer the re-render
   if (document.activeElement && document.activeElement.tagName === 'SELECT') return;
 
-  // Save scroll positions for all panels + chat-log + page
-  const oldPanels = document.querySelectorAll('.panel');
-  const panelScrolls = Array.from(oldPanels).map(p => ({ top: p.scrollTop, left: p.scrollLeft }));
+  // Save scroll positions for all scrollable containers we care about. Any
+  // class listed here will have its scrollTop/scrollLeft restored after the
+  // DOM rebuild, matched by document order (so the 1st .ca-hist-list maps to
+  // the 1st .ca-hist-list after render, etc).
+  const SCROLL_SELECTORS = ['.panel', '.chat-log', '.ca-hist-list', '.ca-dir-list', '.ca-sess-list', '.code-page'];
+  const savedScrolls = {};
+  for (const sel of SCROLL_SELECTORS) {
+    savedScrolls[sel] = Array.from(document.querySelectorAll(sel)).map(p => ({ top: p.scrollTop, left: p.scrollLeft }));
+  }
+  // Special-case the first chat-log so we can optionally sticky-to-bottom on
+  // new streaming content.
   const oldLog = document.querySelector('.chat-log');
-  const prevScroll = oldLog ? oldLog.scrollTop : 0;
   const stickToBottom = oldLog ? (oldLog.scrollHeight - oldLog.scrollTop - oldLog.clientHeight < 60) : true;
   const pageScrollY = window.scrollY || document.documentElement.scrollTop || 0;
 
@@ -1114,18 +1121,21 @@ const render = () => {
     }
   }
 
-  // Restore chat-log scroll
-  const newLog = document.querySelector('.chat-log');
-  if (newLog) newLog.scrollTop = stickToBottom ? newLog.scrollHeight : prevScroll;
-
-  // Restore panel scroll positions (same order: system, services, actions, chat)
-  const newPanels = document.querySelectorAll('.panel');
-  newPanels.forEach((p, i) => {
-    if (panelScrolls[i]) {
-      p.scrollTop = panelScrolls[i].top;
-      p.scrollLeft = panelScrolls[i].left;
-    }
-  });
+  // Restore every tracked scrollable. chat-log is handled specially to keep
+  // the sticky-to-bottom behaviour while streaming.
+  for (const sel of SCROLL_SELECTORS) {
+    const saved = savedScrolls[sel] || [];
+    Array.from(document.querySelectorAll(sel)).forEach((el, i) => {
+      const s = saved[i];
+      if (!s) return;
+      if (sel === '.chat-log' && i === 0 && stickToBottom) {
+        el.scrollTop = el.scrollHeight;
+      } else {
+        el.scrollTop = s.top;
+        el.scrollLeft = s.left;
+      }
+    });
+  }
 
   // Restore page scroll (mobile)
   if (pageScrollY) window.scrollTo(0, pageScrollY);
