@@ -291,11 +291,11 @@ const TOOLS = [
         webhook_method: { type: 'string', enum: ['GET', 'POST'], description: 'For webhook: HTTP method, default POST' },
         steps: {
           type: 'array',
-          description: 'Ordered list of steps. Each step has a "kind" and kind-specific fields. Supported kinds: http, llm, set, email, discord, slack, gmail, notion, github, clickup, trello. All integrations auto-discover credentials from n8n.',
+          description: 'Ordered list of steps. Each step has a "kind" and kind-specific fields. Built-in kinds always available: http, llm, set, email. Integration kinds (credential-gated, auto-attached): discord, discord_bot, slack, notion, github, clickup, trello, sheets, calendar, docs, drive, outlook. The system prompt lists which integrations are actually configured right now — only use those.',
           items: {
             type: 'object',
             properties: {
-              kind: { type: 'string', enum: ['http', 'llm', 'set', 'email', 'discord', 'slack', 'gmail', 'notion', 'github', 'clickup', 'trello'] },
+              kind: { type: 'string', enum: ['http', 'llm', 'set', 'email', 'discord', 'discord_bot', 'slack', 'notion', 'github', 'clickup', 'trello', 'sheets', 'calendar', 'docs', 'drive', 'outlook'] },
               url: { type: 'string', description: 'http: target URL' },
               method: { type: 'string', description: 'http: GET/POST/etc, default GET' },
               body: { type: 'string', description: 'http: JSON body string for POST' },
@@ -303,18 +303,26 @@ const TOOLS = [
               model: { type: 'string', description: 'llm: ollama model name, defaults to llama3.1:8b' },
               field: { type: 'string', description: 'set: new field name' },
               value: { type: 'string', description: 'set: new field value' },
-              to: { type: 'string', description: 'email: recipient' },
-              subject: { type: 'string', description: 'email: subject' },
-              text: { type: 'string', description: 'email: body text' },
-              message: { type: 'string', description: 'discord/slack: message content to send' },
-              channel: { type: 'string', description: 'slack: channel name (default "general")' },
-              database: { type: 'string', description: 'notion: database ID to create page in' },
-              title: { type: 'string', description: 'notion/clickup/trello: page or card title' },
-              content: { type: 'string', description: 'notion: page content' },
-              owner: { type: 'string', description: 'github: repo owner' },
+              to: { type: 'string', description: 'email/outlook: recipient address' },
+              subject: { type: 'string', description: 'email/outlook: subject line' },
+              text: { type: 'string', description: 'email: body text (plain)' },
+              message: { type: 'string', description: 'discord/discord_bot/slack: message content. Supports n8n expressions like {{$json.field}}.' },
+              channel: { type: 'string', description: 'slack: channel name (no # prefix, default "general") OR channel ID starting with C. discord_bot: channel ID' },
+              guild: { type: 'string', description: 'discord_bot: guild (server) ID' },
+              database: { type: 'string', description: 'notion: database ID (the 32-char UUID from the DB URL)' },
+              title: { type: 'string', description: 'notion/github/clickup/trello/calendar/docs/drive: page/issue/card/event/file title' },
+              content: { type: 'string', description: 'notion/github/docs/trello/calendar: body/description text' },
+              owner: { type: 'string', description: 'github: repo owner (user or org name)' },
               repo: { type: 'string', description: 'github: repo name' },
-              operation: { type: 'string', description: 'github/clickup/trello: operation (get, create, etc.)' },
-              list: { type: 'string', description: 'clickup/trello: list ID' }
+              operation: { type: 'string', description: 'per-integration operation override (e.g. github: "create"|"get"|"update"; sheets: "append"|"read"; calendar: "create"|"getAll")' },
+              list: { type: 'string', description: 'clickup/trello: list ID' },
+              document: { type: 'string', description: 'sheets: spreadsheet document ID' },
+              tab: { type: 'string', description: 'sheets: sheet tab name, default "Sheet1"' },
+              calendar: { type: 'string', description: 'calendar: calendar ID, default "primary"' },
+              start: { type: 'string', description: 'calendar: ISO datetime start (e.g. "2026-04-20T10:00:00Z")' },
+              end: { type: 'string', description: 'calendar: ISO datetime end' },
+              folder: { type: 'string', description: 'drive/docs: parent folder ID, default "root"' },
+              body: { type: 'string', description: 'outlook: email body (HTML)' }
             },
             required: ['kind']
           }
@@ -339,31 +347,181 @@ const normalizeArgs = (args) => {
 };
 
 // ─── n8n integration step kinds ─────────────────────────────────────────
-// Maps step kind → { type, version, credType, params(step) }
-// Credential is auto-discovered from n8n's credential store at build time.
+// Each kind maps to the actual n8n node type, version, required credential
+// type, a display label, and a params builder. Credentials are looked up at
+// runtime via /credentials — integrations without a configured credential
+// are filtered out of the advertised set so the model doesn't promise what
+// the user can't run.
+const rl = (value, mode = 'id') => ({ __rl: true, value: String(value == null ? '' : value), mode });
+
 const N8N_INTEGRATIONS = {
-  discord:   { type: 'n8n-nodes-base.discord',     version: 2,   credType: 'discordWebhookApi',
-               params: s => ({ content: s.message || s.content || s.text || '' }) },
-  slack:     { type: 'n8n-nodes-base.slack',        version: 2.2, credType: 'slackOAuth2Api',
-               params: s => ({ resource: 'message', operation: 'post', channel: s.channel || 'general',
-                               text: s.message || s.content || s.text || '' }) },
-  gmail:     { type: 'n8n-nodes-base.gmail',        version: 2.1, credType: 'gmailOAuth2',
-               params: s => ({ resource: 'message', operation: 'send', sendTo: s.to || '',
-                               subject: s.subject || '', message: s.body || s.text || s.message || '', options: {} }) },
-  notion:    { type: 'n8n-nodes-base.notion',       version: 2.2, credType: 'notionOAuth2Api',
-               params: s => ({ resource: 'page', operation: 'create', databaseId: s.database || '',
-                               title: s.title || '', ...(s.content ? { content: s.content } : {}) }) },
-  github:    { type: 'n8n-nodes-base.github',       version: 1,   credType: 'githubOAuth2Api',
-               params: s => ({ owner: s.owner || '', repository: s.repo || '',
-                               resource: s.resource || 'issue', operation: s.operation || 'get' }) },
-  clickup:   { type: 'n8n-nodes-base.clickUp',      version: 1,   credType: 'clickUpOAuth2Api',
-               params: s => ({ resource: 'task', operation: s.operation || 'create',
-                               name: s.title || s.name || '', list: s.list || '' }) },
-  trello:    { type: 'n8n-nodes-base.trello',       version: 1,   credType: 'trelloApi',
-               params: s => ({ resource: 'card', operation: s.operation || 'create',
-                               name: s.title || s.name || '', listId: s.list || '' }) },
+  discord: {
+    type: 'n8n-nodes-base.discord', version: 2, credType: 'discordWebhookApi', label: 'Discord (webhook)',
+    params: s => ({
+      authentication: 'webhook',
+      resource: 'message',
+      content: s.message || s.content || s.text || '',
+      options: {},
+    }),
+  },
+  discord_bot: {
+    type: 'n8n-nodes-base.discord', version: 2, credType: 'discordBotApi', label: 'Discord (bot)',
+    params: s => ({
+      authentication: 'botToken',
+      resource: 'message',
+      guildId: rl(s.guild || '', 'id'),
+      channelId: rl(s.channel || '', 'id'),
+      content: s.message || s.content || s.text || '',
+      options: {},
+    }),
+  },
+  slack: {
+    type: 'n8n-nodes-base.slack', version: 2.2, credType: 'slackApi', label: 'Slack',
+    params: s => {
+      const ch = String(s.channel || 'general').replace(/^#/, '');
+      return {
+        authentication: 'accessToken',
+        resource: 'message',
+        operation: 'post',
+        select: 'channel',
+        channelId: rl(ch, /^C[A-Z0-9]{6,}$/i.test(ch) ? 'id' : 'name'),
+        text: s.message || s.content || s.text || '',
+        otherOptions: {},
+      };
+    },
+  },
+  notion: {
+    type: 'n8n-nodes-base.notion', version: 2.2, credType: 'notionApi', label: 'Notion',
+    params: s => ({
+      resource: 'databasePage',
+      operation: 'create',
+      databaseId: rl(s.database || '', 'id'),
+      title: s.title || '',
+      simple: true,
+      propertiesUi: { propertyValues: [] },
+      blockUi: s.content
+        ? { blockValues: [{ type: 'paragraph', textContent: s.content }] }
+        : { blockValues: [] },
+    }),
+  },
+  github: {
+    type: 'n8n-nodes-base.github', version: 1.1, credType: 'githubApi', label: 'GitHub',
+    params: s => ({
+      authentication: 'accessToken',
+      resource: s.resource || 'issue',
+      operation: s.operation || 'create',
+      owner: rl(s.owner || '', 'name'),
+      repository: rl(s.repo || '', 'name'),
+      title: s.title || '',
+      body: s.content || s.message || s.text || '',
+      labels: [], assignees: [],
+    }),
+  },
+  clickup: {
+    type: 'n8n-nodes-base.clickUp', version: 1, credType: 'clickUpApi', label: 'ClickUp',
+    params: s => ({
+      resource: 'task',
+      operation: s.operation || 'create',
+      list: s.list || '',
+      name: s.title || s.name || '',
+      additionalFields: s.content ? { description: s.content } : {},
+    }),
+  },
+  trello: {
+    type: 'n8n-nodes-base.trello', version: 1, credType: 'trelloApi', label: 'Trello',
+    params: s => ({
+      resource: 'card',
+      operation: s.operation || 'create',
+      listId: s.list || '',
+      name: s.title || s.name || '',
+      description: s.content || '',
+    }),
+  },
+  sheets: {
+    type: 'n8n-nodes-base.googleSheets', version: 4.5, credType: 'googleSheetsOAuth2Api', label: 'Google Sheets',
+    params: s => ({
+      resource: 'sheet',
+      operation: s.operation || 'append',
+      documentId: rl(s.document || s.sheet || '', 'id'),
+      sheetName: rl(s.tab || 'Sheet1', 'name'),
+      columns: { mappingMode: 'autoMapInputData', value: {} },
+      options: {},
+    }),
+  },
+  calendar: {
+    type: 'n8n-nodes-base.googleCalendar', version: 1.2, credType: 'googleCalendarOAuth2Api', label: 'Google Calendar',
+    params: s => ({
+      resource: 'event',
+      operation: s.operation || 'create',
+      calendar: rl(s.calendar || 'primary', 'id'),
+      start: s.start || '',
+      end: s.end || s.start || '',
+      additionalFields: {
+        summary: s.title || 'Event',
+        description: s.content || '',
+      },
+    }),
+  },
+  docs: {
+    type: 'n8n-nodes-base.googleDocs', version: 2, credType: 'googleDocsOAuth2Api', label: 'Google Docs',
+    params: s => ({
+      operation: s.operation || 'create',
+      folderId: rl(s.folder || 'root', 'id'),
+      title: s.title || 'Untitled',
+      body: s.content || s.text || '',
+    }),
+  },
+  drive: {
+    type: 'n8n-nodes-base.googleDrive', version: 3, credType: 'googleDriveOAuth2Api', label: 'Google Drive',
+    params: s => ({
+      resource: 'file',
+      operation: s.operation || 'upload',
+      name: s.title || s.name || 'untitled.txt',
+      driveId: rl('My Drive', 'list'),
+      folderId: rl(s.folder || 'root', 'id'),
+    }),
+  },
+  outlook: {
+    type: 'n8n-nodes-base.microsoftOutlook', version: 2, credType: 'microsoftOutlookOAuth2Api', label: 'Outlook (email)',
+    params: s => ({
+      resource: 'message',
+      operation: 'send',
+      subject: s.subject || '',
+      bodyContent: s.body || s.text || s.message || '',
+      bodyContentType: 'html',
+      toRecipients: s.to || '',
+      additionalFields: {},
+    }),
+  },
 };
-let _credCache = null; // cache n8n credentials per process lifetime
+
+// ─── Runtime credential discovery ───────────────────────────────────────
+// Fetches n8n's configured credentials and maps each supported integration
+// kind to the credential record (id, name) it will reference. Integrations
+// without a configured credential are DROPPED from the result — the system
+// prompt and validation both rely on this so the model only sees what can
+// actually run.
+let _integCache = null;
+let _integCacheExp = 0;
+const getIntegrations = async () => {
+  if (_integCache && Date.now() < _integCacheExp) return _integCache;
+  let list = [];
+  try {
+    const r = await n8nApi('/credentials');
+    list = r.data || r || [];
+  } catch { /* n8n unreachable — fall through with empty list */ }
+  const byType = {};
+  for (const c of list) if (!byType[c.type]) byType[c.type] = c;
+  const out = {};
+  for (const [kind, integ] of Object.entries(N8N_INTEGRATIONS)) {
+    const cred = byType[integ.credType];
+    if (cred) out[kind] = { ...integ, cred: { id: cred.id, name: cred.name } };
+  }
+  _integCache = out;
+  _integCacheExp = Date.now() + 5 * 60 * 1000;
+  return _integCache;
+};
+const invalidateIntegCache = () => { _integCache = null; _integCacheExp = 0; };
 
 const runTool = async (name, args) => {
   args = normalizeArgs(args);
@@ -538,16 +696,24 @@ const runTool = async (name, args) => {
         addNode({ id, name: `Set ${i + 1}`, type: 'n8n-nodes-base.set', typeVersion: 3.4,
           parameters: { assignments: { assignments: [{ id: `a${i}`, name: s.field, value: s.value, type: 'string' }] } } });
       } else if (N8N_INTEGRATIONS[s.kind]) {
-        const integ = N8N_INTEGRATIONS[s.kind];
-        const node = { id, name: `${s.kind.charAt(0).toUpperCase() + s.kind.slice(1)} ${i + 1}`,
-          type: integ.type, typeVersion: integ.version, parameters: integ.params(s) };
-        if (integ.credType) {
-          try {
-            if (!_credCache) _credCache = await n8nApi('/credentials').then(r => r.data || r);
-            const cred = _credCache.find(c => c.type === integ.credType);
-            if (cred) node.credentials = { [integ.credType]: { id: cred.id, name: cred.name } };
-          } catch {}
+        const integs = await getIntegrations();
+        const integ = integs[s.kind];
+        if (!integ) {
+          const spec = N8N_INTEGRATIONS[s.kind];
+          throw new Error(
+            `Step kind "${s.kind}" needs a "${spec.credType}" credential in n8n, but none is configured. ` +
+            `Either add that credential in n8n Settings, or pick a different step kind. ` +
+            `Available kinds right now: ${Object.keys(integs).join(', ') || '(none configured)'}.`
+          );
         }
+        const node = {
+          id,
+          name: `${integ.label} ${i + 1}`,
+          type: integ.type,
+          typeVersion: integ.version,
+          parameters: integ.params(s),
+          credentials: { [integ.credType]: { id: integ.cred.id, name: integ.cred.name } },
+        };
         addNode(node);
       } else if (s.kind === 'email') {
         addNode({ id, name: `Email ${i + 1}`, type: 'n8n-nodes-base.emailSend', typeVersion: 2.1,
@@ -579,7 +745,62 @@ setInterval(() => {
   }
 }, 60000);
 
-const SYSTEM_PROMPT = `You are an assistant on the user's self-hosted server (agent.ojee.net). You HAVE tools. You HAVE internet via web_search. Use them.
+// ─── System prompt ─────────────────────────────────────────────────────
+// Built per-request from the live set of configured n8n credentials so the
+// model only advertises integrations it can actually run. Recipes are full
+// worked JSON so small local models can pattern-match.
+const INTEG_RECIPES = {
+  discord: `- discord — post a message to Discord via webhook (SIMPLEST, default for Discord):
+    { kind: "discord", message: "Hello from n8n" }
+  The webhook URL lives in the credential. You do NOT supply a URL or channel.
+  Supports n8n expressions: message: "Weather today: {{$json.current.temperature_2m}}°C"`,
+  discord_bot: `- discord_bot — post via Discord bot (needs guild + channel IDs):
+    { kind: "discord_bot", guild: "SERVER_ID", channel: "CHANNEL_ID", message: "..." }`,
+  slack: `- slack — post to a Slack channel:
+    { kind: "slack", channel: "general", message: "Deploy finished" }
+  channel is a name WITHOUT "#" (e.g. "general"), OR a channel ID starting with "C".`,
+  notion: `- notion — create a page in a Notion database:
+    { kind: "notion", database: "DATABASE_UUID", title: "Page title", content: "Body text" }
+  database is the 32-char UUID from the DB URL. The user must share the DB with the integration.`,
+  github: `- github — create an issue (default), or override operation:
+    { kind: "github", owner: "username", repo: "reponame", title: "Bug", content: "Details" }
+    { kind: "github", owner: "...", repo: "...", operation: "get", resource: "repository" }`,
+  clickup: `- clickup — create a task in a ClickUp list:
+    { kind: "clickup", list: "LIST_ID", title: "Task name", content: "Description" }`,
+  trello: `- trello — create a card in a Trello list:
+    { kind: "trello", list: "LIST_ID", title: "Card name", content: "Description" }`,
+  sheets: `- sheets — append a row to a Google Sheet (auto-maps previous step's fields to columns):
+    { kind: "sheets", document: "SPREADSHEET_ID", tab: "Sheet1" }`,
+  calendar: `- calendar — create a Google Calendar event:
+    { kind: "calendar", start: "2026-04-20T10:00:00Z", end: "2026-04-20T11:00:00Z", title: "Meeting", content: "Agenda" }
+  Omit calendar → uses the user's primary calendar.`,
+  docs: `- docs — create a Google Doc:
+    { kind: "docs", title: "Weekly notes", content: "# Monday...", folder: "FOLDER_ID" (optional) }`,
+  drive: `- drive — create/upload a file in Google Drive:
+    { kind: "drive", title: "report.txt", folder: "FOLDER_ID" (optional) }`,
+  outlook: `- outlook — send an email via Microsoft Outlook:
+    { kind: "outlook", to: "user@example.com", subject: "Subject", body: "<p>HTML body</p>" }`,
+};
+
+const INTEG_SUMMARY = {
+  discord: 'Discord (webhook)', discord_bot: 'Discord (bot)', slack: 'Slack',
+  notion: 'Notion', github: 'GitHub', clickup: 'ClickUp', trello: 'Trello',
+  sheets: 'Google Sheets', calendar: 'Google Calendar', docs: 'Google Docs',
+  drive: 'Google Drive', outlook: 'Outlook (email)',
+};
+
+const buildSystemPrompt = async () => {
+  let integs = {};
+  try { integs = await getIntegrations(); } catch {}
+  const availKinds = Object.keys(integs);
+  const availList = availKinds.length
+    ? availKinds.map(k => `${k} (${INTEG_SUMMARY[k] || k})`).join(', ')
+    : '(none — n8n has no credentials configured)';
+  const availRecipes = availKinds.map(k => INTEG_RECIPES[k]).filter(Boolean).join('\n\n');
+  const missingKinds = Object.keys(INTEG_RECIPES).filter(k => !integs[k]);
+  const missingList = missingKinds.length ? missingKinds.join(', ') : '(none)';
+
+  return `You are an assistant on the user's self-hosted server (agent.ojee.net). You HAVE tools. You HAVE internet via web_search. Use them.
 
 ### HARD RULES — obey above all else
 
@@ -610,68 +831,149 @@ const SYSTEM_PROMPT = `You are an assistant on the user's self-hosted server (ag
 
 Tool results may contain Title, description, og:description, Content sections. These are the answer. Extract the fact directly. Don't say "I couldn't find info" when a description line is right there.
 
-### Connected n8n credentials (what you can describe as "possible" for workflows)
+### Preferred free no-auth APIs (use web_fetch — and use these same URLs inside http steps in workflows)
 
-The user has OAuth / API credentials configured in n8n for:
-Discord, Slack, Notion, Gmail, Outlook (Microsoft Graph), Google Drive, GitHub, Cloudflare, ClickUp, Spotify, Trello, Ollama (local LLMs).
+For the common asks below, skip web_search and hit these endpoints directly — they return clean JSON, require no keys, work from Egypt, and are great building blocks inside n8n http steps.
 
-When the user asks "can you X" or "what can you automate", mention these. You can BUILD workflows via n8n_quick_workflow with step kinds: http, llm, set, email, discord, slack, gmail, notion, github, clickup, trello. All credentials are ALREADY configured in n8n — just use the right "kind" and the server auto-discovers the credential. NEVER ask for webhook URLs, API keys, or credentials — they are already set up.
-
-### Preferred free no-auth APIs (use web_fetch)
-
-For the common asks below, skip web_search and hit these endpoints directly — they return clean JSON. Build the URL, call web_fetch, parse the JSON result.
-
-- Weather / forecast: https://api.open-meteo.com/v1/forecast?latitude=X&longitude=Y&current=temperature_2m,weather_code&timezone=auto
+Weather & places
+- Weather / forecast: https://api.open-meteo.com/v1/forecast?latitude=X&longitude=Y&current=temperature_2m,weather_code,wind_speed_10m&timezone=auto
 - City → lat/lon: https://geocoding-api.open-meteo.com/v1/search?name=CITY&count=1
-- GitHub public info (repos, releases, issues): https://api.github.com/repos/OWNER/REPO  (or /releases/latest, /issues, etc.)
-- Wikipedia summary: https://en.wikipedia.org/api/rest_v1/page/summary/TITLE  (URL-encode the title)
-- Country info (capital, currency, population, languages): https://restcountries.com/v3.1/name/NAME
+- Country info: https://restcountries.com/v3.1/name/NAME
+- IP → location/ISP: https://ipapi.co/IP/json  (or https://ipapi.co/json/ for the caller's IP)
+- Public IP: https://api.ipify.org?format=json
+
+Time & money
 - Current time in any zone: https://timeapi.io/api/Time/current/zone?timeZone=IANA/Zone
-- Currency conversion (rates): https://api.exchangerate-api.com/v4/latest/USD  (replace USD with any base)
-- IP → location / ISP: https://ipapi.co/IP/json  (or https://ipapi.co/json/ for the caller's IP)
+- World clock / convert: https://timeapi.io/api/Conversion/ConvertTimeZone
+- Currency rates: https://api.exchangerate-api.com/v4/latest/USD  (replace USD with any base)
+- Crypto prices: https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&vs_currencies=usd
+- Public holidays: https://date.nager.at/api/v3/PublicHolidays/2026/US  (change year and country code)
 
-For anything NOT on this list but factual, fall back to web_search. These endpoints are shortcuts — use them when they fit.
+Knowledge & reference
+- Wikipedia summary: https://en.wikipedia.org/api/rest_v1/page/summary/TITLE  (URL-encode)
+- Dictionary / definitions: https://api.dictionaryapi.dev/api/v2/entries/en/WORD
+- GitHub public info: https://api.github.com/repos/OWNER/REPO  (or /releases/latest, /issues, /contributors)
+- HN top stories: https://hacker-news.firebaseio.com/v0/topstories.json  (then /item/<id>.json)
+- Reddit (JSON): https://www.reddit.com/r/SUB/hot.json?limit=10
+- xkcd: https://xkcd.com/info.0.json (latest) or https://xkcd.com/NUM/info.0.json
 
-### n8n building
+Fun / content
+- Random joke: https://official-joke-api.appspot.com/random_joke
+- Dad joke (Accept: application/json): https://icanhazdadjoke.com
+- Chuck Norris: https://api.chucknorris.io/jokes/random
+- Random useless fact: https://uselessfacts.jsph.pl/api/v2/facts/random
+- Advice: https://api.adviceslip.com/advice
+- Activity idea when bored: https://bored-api.appbrewery.com/random
+- Random quote: https://zenquotes.io/api/random
+- Trivia (amount 1-50): https://opentdb.com/api.php?amount=5&type=multiple
+- Cat fact: https://catfact.ninja/fact   ·   Cat image: https://api.thecatapi.com/v1/images/search
+- Dog image: https://dog.ceo/api/breeds/image/random
+- Random user profile: https://randomuser.me/api/
+- Pokémon: https://pokeapi.co/api/v2/pokemon/NAME_OR_ID
+- Meal recipe (random): https://www.themealdb.com/api/json/v1/1/random.php   ·   Cocktail: https://www.thecocktaildb.com/api/json/v1/1/random.php
 
-ONLY call n8n_* tools when the user EXPLICITLY asks to build, create, list, activate, or modify an n8n workflow. Words like "workflow", "automation", "cron job", "webhook", "schedule", "n8n", "build me", "set up" combined with an automation verb. Greetings ("hi", "hello"), questions, casual chat, or any unrelated request = do NOT call n8n_quick_workflow. If unsure, just chat back normally.
+Science & space
+- People in space right now: http://api.open-notify.org/astros.json
+- ISS location: http://api.open-notify.org/iss-now.json
+- NASA APOD: https://api.nasa.gov/planetary/apod?api_key=DEMO_KEY  (DEMO_KEY is rate-limited but works)
+- SpaceX latest launch: https://api.spacexdata.com/v5/launches/latest
 
-ABSOLUTELY CRITICAL when user asks to "set up / create / build / make" an n8n workflow:
-- You MUST call n8n_quick_workflow. That is the ONLY correct response.
-- DO NOT write a step-by-step tutorial.
-- DO NOT describe how to drag nodes in the n8n UI.
-- DO NOT mention "click the + button" or "add a Start node" or similar manual instructions.
-- DO NOT say "Here's how you'd do it" or "You can follow these steps".
-- Emit a single n8n_quick_workflow tool call. The server creates the workflow. That's it.
-- If the user asks for "a basic workflow" without specifics, pick reasonable defaults: trigger "manual", one step with kind "set" that assigns some demo value. Do NOT ask the user for clarification — build something sensible and report the URL.
+Name inference (fun demos)
+- Guess age from name: https://api.agify.io/?name=NAME
+- Guess gender: https://api.genderize.io/?name=NAME
+- Guess nationality: https://api.nationalize.io/?name=NAME
 
-When the user IS asking for a workflow, prefer n8n_quick_workflow. Triggers: "schedule", "webhook", or "manual". Examples of shape only (do not invoke unless user actually asks):
-- Schedule ping: trigger "schedule", every_hours N, step kind "http" with url
-- Webhook LLM: trigger "webhook", webhook_path "foo", step kind "llm" with a prompt
-- Digest: trigger "schedule", step kind "llm" then step kind "email"
-- Discord alert: trigger "schedule", step kind "http" to fetch data, then step kind "discord" with message
-- Slack notification: trigger "webhook", step kind "slack" with channel and message
-- Gmail send: trigger "manual", step kind "gmail" with to, subject, body
-- IMPORTANT: All integration credentials (Discord, Slack, Gmail, Notion, GitHub, ClickUp, Trello) are ALREADY configured in n8n. Use the matching step kind directly. Do NOT use kind "email"/"http" as a workaround. Do NOT ask for webhook URLs or API keys.
+For anything NOT on this list but factual, fall back to web_search. These endpoints are the go-to building blocks for http steps in workflows — chain them with discord/slack/sheets/notion to build useful automations without any key setup.
 
-Only drop to n8n_create_workflow if quick_workflow can't express it. After create, give the user the workflow URL (https://agent.ojee.net/flow/workflow/<id>) and ask before activating.
+### n8n workflows — how to build them
 
-### Examples of correct behavior
+ONLY call n8n_* tools when the user EXPLICITLY asks to build, create, list, activate, or modify a workflow. Words like "workflow", "automation", "cron job", "webhook", "schedule", "n8n", "build me", "set up" with an automation verb. Greetings, questions, chat = do NOT call n8n_quick_workflow.
+
+When the user DOES ask for a workflow:
+- CALL n8n_quick_workflow directly. Do NOT describe steps, do NOT write a tutorial, do NOT show example JSON in text — the tool call IS the answer.
+- Credentials are ALREADY attached by the server. NEVER ask the user for API keys, webhook URLs, bot tokens, OAuth logins, or IDs that aren't specific to their task.
+- If the user doesn't specify details ("make a basic workflow"), pick sensible defaults (trigger "manual", one "set" step with a demo value) and build it — do NOT ask for clarification.
+- After building, report the URL: https://agent.ojee.net/flow/workflow/<id> — and ask before activating.
+
+### Triggers
+
+- schedule — runs on a cron. Fields: every_hours OR every_minutes.
+- webhook — fires on HTTP request to /webhook/<path>. Fields: webhook_path, webhook_method.
+- manual — user clicks "Execute Workflow" in n8n (great for testing).
+
+### Always-available step kinds (no credentials needed)
+
+- http — call any URL. { kind: "http", url: "https://...", method: "GET"|"POST", body: "{...}" }
+- llm — run a local Ollama model. { kind: "llm", prompt: "...", model: "llama3.1:8b" }
+- set — assign a field. { kind: "set", field: "note", value: "hello" }
+- email — send via the stack's default SMTP. { kind: "email", to: "...", subject: "...", text: "..." }
+
+### Configured n8n integrations — USE ONLY THESE integration kinds
+
+Available right now: ${availList}
+NOT available (do not use, their credential isn't set up): ${missingList}
+
+${availRecipes || '(No integrations currently configured. Use http/llm/set/email only, or tell the user to add credentials in n8n.)'}
+
+### Integration rules
+
+- NEVER use an integration kind that isn't in the "Available right now" list. If the user asks for one that isn't available, say so and offer http as a fallback (e.g. for missing Gmail, use an email step or an http step to an SMTP-ish endpoint).
+- NEVER put a webhook URL, API key, or bot token in a step's fields. Those live in the credential — the server attaches them automatically.
+- Use n8n expressions to chain steps: {{$json.fieldName}} references the previous step's output. For the weather example, an http step to open-meteo produces {{$json.current.temperature_2m}}.
+- For Discord, prefer "discord" (webhook) unless the user specifically says "via the bot" — webhook is simpler and works with the default credential.
+
+### Full worked examples (follow this shape exactly)
+
+Q: "ping google every 10 min"
+→ n8n_quick_workflow({
+    name: "Ping Google",
+    trigger: "schedule", every_minutes: 10,
+    steps: [{ kind: "http", url: "https://google.com" }]
+  })
+
+Q: "send me a discord message with Cairo's weather every day"
+→ n8n_quick_workflow({
+    name: "Daily Cairo Weather",
+    trigger: "schedule", every_hours: 24,
+    steps: [
+      { kind: "http", url: "https://api.open-meteo.com/v1/forecast?latitude=30.03&longitude=31.24&current=temperature_2m,weather_code&timezone=auto" },
+      { kind: "discord", message: "Cairo today: {{$json.current.temperature_2m}}°C, code {{$json.current.weather_code}}" }
+    ]
+  })
+
+Q: "notify slack #deploys when a webhook fires"
+→ n8n_quick_workflow({
+    name: "Deploy Ping → Slack",
+    trigger: "webhook", webhook_path: "deploy-ping",
+    steps: [{ kind: "slack", channel: "deploys", message: "Deploy webhook received: {{$json.body.ref}}" }]
+  })
+
+Q: "log every webhook hit to a google sheet"
+→ n8n_quick_workflow({
+    name: "Webhook → Sheet Log",
+    trigger: "webhook", webhook_path: "log",
+    steps: [{ kind: "sheets", document: "SHEET_ID_HERE", tab: "Log" }]
+  })
+
+Q: "create a notion page summarizing daily news"
+→ n8n_quick_workflow({
+    name: "Daily News → Notion",
+    trigger: "schedule", every_hours: 24,
+    steps: [
+      { kind: "http", url: "https://hacker-news.firebaseio.com/v0/topstories.json" },
+      { kind: "llm", prompt: "Summarize these HN IDs in 3 bullets: {{$json}}" },
+      { kind: "notion", database: "DB_UUID_HERE", title: "News {{$now}}", content: "{{$json.response}}" }
+    ]
+  })
+
+### Examples of non-workflow behavior
 
 Q: "what's the time in Alberta"
-→ web_search({query:"current time Alberta Canada"}) → extract time from result → "It's 6:15 PM MDT in Alberta."
-
-Q: "who is the PM of Canada"
-→ web_search({query:"current prime minister of Canada"}) → state the answer.
+→ web_search({query:"current time Alberta Canada"}) → extract time → "It's 6:15 PM MDT in Alberta."
 
 Q: "what's 42 squared"
-→ Answer "1764" directly, no tool.
-
-Q: "make me a workflow that pings google every 10 min"
-→ n8n_quick_workflow({name:"Ping Google", trigger:"schedule", every_minutes:10, steps:[{kind:"http", url:"https://google.com"}]})
-
-Q: "send me a discord message with the weather every day"
-→ n8n_quick_workflow({name:"Daily Weather Discord", trigger:"schedule", every_hours:24, steps:[{kind:"http", url:"https://api.open-meteo.com/v1/forecast?latitude=30.03&longitude=31.35&current=temperature_2m,weather_code&timezone=auto"}, {kind:"discord", message:"Today's weather: {{$json.current.temperature_2m}}°C"}]})`;
+→ "1764" directly, no tool.`;
+};
 
 const processChatJob = async (job, model, messages) => {
   const emit = (evt) => {
@@ -694,7 +996,7 @@ const processChatJob = async (job, model, messages) => {
     job.doneAt = Date.now();
     job.listeners.clear();
   };
-  const conv = [{ role: 'system', content: SYSTEM_PROMPT }, ...messages];
+  const conv = [{ role: 'system', content: await buildSystemPrompt() }, ...messages];
   // Select the tool set based on the latest user turn. Small models misfire on
   // short/greeting prompts (e.g. "hello" triggers n8n_quick_workflow just
   // because it appears in an example). Filter tools so the model physically
