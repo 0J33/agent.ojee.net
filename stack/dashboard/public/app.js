@@ -367,7 +367,7 @@ const gauge = (label, pct, sub, opts = {}) => {
   let tempHtml = '';
   if (t != null) {
     const tcls = tHot ? ' hot' : tWarm ? ' warm' : '';
-    tempHtml = `<span class="gauge-temp${tcls}"><svg viewBox="0 0 24 24" width="10" height="10" fill="none">${ICONS.temp}</svg>${t}°C</span>`;
+    tempHtml = `<span class="gauge-temp${tcls}">${t}°C</span>`;
   }
   return el('div', { class: 'gauge' + cls,
     html: `${tempHtml}${gaugeSvg(pct)}<div class="gauge-label">${escapeHtml(label)}</div>${sub ? `<div class="gauge-sub">${escapeHtml(sub)}</div>` : ''}` });
