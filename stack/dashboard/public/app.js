@@ -346,16 +346,28 @@ const renderBottomTabs = () => {
 // ─── SVG primitives: gauge + sparkline ─────────────────────────────────
 // Returns a circular gauge SVG. Stroke color comes from CSS via the parent's
 // .warn/.danger class — don't set inline stroke here or it'd override CSS.
-const gaugeSvg = (pct) => {
+// When temp is provided, render it as a small text inside the ring below the
+// percent (no extra DOM, no badge — feels like part of the gauge itself).
+const gaugeSvg = (pct, temp) => {
   const r = 30, cx = 38, cy = 38;
   const circ = 2 * Math.PI * r;
   const dash = (Math.max(0, Math.min(100, pct)) / 100) * circ;
+  const hasTemp = temp != null;
+  const tHot = hasTemp && temp > 85;
+  const tWarm = hasTemp && temp > 70;
+  const tcls = tHot ? ' hot' : tWarm ? ' warm' : '';
+  const pctY = hasTemp ? '42%' : '50%';
+  const pctCls = hasTemp ? ' with-temp' : '';
+  const tempText = hasTemp
+    ? `<text class="gauge-temp-text${tcls}" x="50%" y="64%" dominant-baseline="middle" text-anchor="middle">${temp}°C</text>`
+    : '';
   return `<svg viewBox="0 0 76 76" width="76" height="76">
     <circle class="gauge-track" cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke-width="6"/>
     <circle class="gauge-fill" cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke-width="6"
       stroke-dasharray="${dash} ${circ}" stroke-linecap="round"
       transform="rotate(-90 ${cx} ${cy})"/>
-    <text class="gauge-text" x="50%" y="50%" dominant-baseline="middle" text-anchor="middle">${Math.round(pct)}%</text>
+    <text class="gauge-text${pctCls}" x="50%" y="${pctY}" dominant-baseline="middle" text-anchor="middle">${Math.round(pct)}%</text>
+    ${tempText}
   </svg>`;
 };
 const gauge = (label, pct, sub, opts = {}) => {
@@ -364,13 +376,8 @@ const gauge = (label, pct, sub, opts = {}) => {
   const tWarm = t != null && t > 70;
   const cls = (pct > 90 || tHot) ? ' danger'
             : (pct > 75 || tWarm) ? ' warn' : '';
-  let tempHtml = '';
-  if (t != null) {
-    const tcls = tHot ? ' hot' : tWarm ? ' warm' : '';
-    tempHtml = `<span class="gauge-temp${tcls}">${t}°C</span>`;
-  }
   return el('div', { class: 'gauge' + cls,
-    html: `${tempHtml}${gaugeSvg(pct)}<div class="gauge-label">${escapeHtml(label)}</div>${sub ? `<div class="gauge-sub">${escapeHtml(sub)}</div>` : ''}` });
+    html: `${gaugeSvg(pct, t)}<div class="gauge-label">${escapeHtml(label)}</div>${sub ? `<div class="gauge-sub">${escapeHtml(sub)}</div>` : ''}` });
 };
 
 // Sparkline SVG from values array (auto-scaled)
@@ -478,8 +485,6 @@ const panelSystem = () => {
   );
 
   const sparks = el('div', { class: 'sparkline-row' },
-    sparklineCard('CPU 5m', `${s.cpu.avg.toFixed(0)}%`, state.history.cpu),
-    sparklineCard('RAM 5m', `${s.memory.percent}%`, state.history.ram),
     sparklineCard2('Disk I/O',
       `↓${fmtBytes(s.disk?.read_per_s || 0)}/s`, `↑${fmtBytes(s.disk?.write_per_s || 0)}/s`,
       'read', 'write',

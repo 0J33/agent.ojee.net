@@ -282,9 +282,10 @@ a { color: var(--accent); text-decoration: none; }
 .gauge.danger .gauge-fill { stroke: var(--danger); }
 .gauge .gauge-text {
   font-family: var(--font-mono);
-  font-size: 0.85rem; font-weight: 600;
+  font-size: 11px; font-weight: 600;
   fill: var(--text);
 }
+.gauge .gauge-text.with-temp { font-size: 10px; }
 .gauge .gauge-label {
   font-size: 0.65rem; font-weight: 500; letter-spacing: 0.5px;
   color: var(--text-muted);
@@ -294,23 +295,11 @@ a { color: var(--accent); text-decoration: none; }
   font-size: 0.65rem; color: var(--text-dim);
   font-family: var(--font-mono);
 }
-.gauge-temp {
-  position: absolute; top: 6px; right: 6px;
-  display: inline-flex; align-items: center; gap: 4px;
-  font-family: var(--font-mono);
-  font-size: 0.7rem; font-weight: 600;
-  color: var(--text-muted);
-  padding: 3px 8px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  line-height: 1;
-}
-.gauge-temp svg { width: 12px; height: 12px; color: var(--text-faint); flex-shrink: 0; }
-.gauge-temp.warm { color: var(--warn); border-color: rgba(0, 170, 170, 0.45); }
-.gauge-temp.warm svg { color: var(--warn); }
-.gauge-temp.hot  { color: var(--danger); border-color: rgba(255, 68, 68, 0.45); }
-.gauge-temp.hot svg { color: var(--danger); }
+/* Temperature text rendered INSIDE the gauge SVG (below the percent) so it
+   reads as a native part of the gauge instead of a tacked-on badge. */
+.gauge-temp-text { font-family: var(--font-mono); font-size: 6.5px; font-weight: 500; fill: var(--text-dim); }
+.gauge-temp-text.warm { fill: var(--warn); }
+.gauge-temp-text.hot  { fill: var(--danger); }
 
 /* ─── System banner (uptime + os) ─────────────────────────────────────── */
 .sys-banner {
