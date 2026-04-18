@@ -194,9 +194,9 @@ a { color: var(--accent); text-decoration: none; }
 .brand-wrap { display: flex; align-items: center; gap: var(--sp-3); min-width: 0; }
 .brand-icon { width: 24px; height: 24px; flex-shrink: 0; }
 .brand {
-  font-size: 0.95rem; font-weight: 700; letter-spacing: 4px;
-  background: linear-gradient(135deg, var(--text), var(--accent));
-  -webkit-background-clip: text; background-clip: text; color: transparent;
+  font-family: var(--font-mono);
+  font-size: 0.95rem; font-weight: 900; letter-spacing: 3px;
+  color: var(--text);
 }
 .header-right { display: flex; align-items: center; gap: var(--sp-3); flex-shrink: 0; }
 .status-pill {
