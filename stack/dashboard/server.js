@@ -503,7 +503,9 @@ const runTool = async (name, args) => {
         addNode({ id, name: `Email ${i + 1}`, type: 'n8n-nodes-base.emailSend', typeVersion: 2.1,
           parameters: { toEmail: s.to, subject: s.subject, text: s.text, options: {} } });
       } else {
-        throw new Error(`unknown step kind: ${s.kind}`);
+        // Unknown step kind — skip it rather than failing the whole workflow
+        addNode({ id, name: `Note ${i + 1}`, type: 'n8n-nodes-base.set', typeVersion: 3.4,
+          parameters: { assignments: { assignments: [{ id: `a${i}`, name: 'skipped_step', value: `unsupported kind: ${s.kind}`, type: 'string' }] } } });
       }
     });
     const r = await n8nApi('/workflows', {
@@ -519,7 +521,7 @@ const sseWrite = (res, obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
 
 // ─── Background chat jobs — survive tab close ────────────────────────────
 const chatJobs = new Map();
-const JOB_TTL = 10 * 60 * 1000; // keep completed jobs 10 min
+const JOB_TTL = 30 * 60 * 1000; // keep completed jobs 30 min
 setInterval(() => {
   const now = Date.now();
   for (const [id, job] of chatJobs) {
@@ -661,7 +663,8 @@ const processChatJob = async (job, model, messages) => {
       const msg = data.message || {};
       let toolCalls = msg.tool_calls || [];
       let textOut = msg.content || '';
-      if (!toolCalls.length && textOut && textOut.includes('"name"')) {
+      if (!toolCalls.length && textOut) {
+        const toolNames = TOOLS.map(t => t.function.name);
         const extractJsonAt = (s, from) => {
           let depth = 0, end = -1, inStr = false, esc = false;
           for (let idx = from; idx < s.length; idx++) {
@@ -675,21 +678,47 @@ const processChatJob = async (job, model, messages) => {
           }
           return end > from ? s.slice(from, end + 1) : null;
         };
-        let cursor = 0;
-        while (cursor < textOut.length) {
-          const start = textOut.indexOf('{', cursor);
-          if (start < 0) break;
-          const block = extractJsonAt(textOut, start);
-          if (!block) break;
-          try {
-            const parsed = JSON.parse(block);
-            if (parsed.name && TOOLS.some(t => t.function.name === parsed.name)) {
-              const fnArgs = parsed.arguments || parsed.parameters || parsed.args || {};
-              toolCalls = [{ function: { name: parsed.name, arguments: fnArgs } }];
-              break;
+        // Strategy 1: detect toolName({...}) function-call syntax
+        const fnCallRe = new RegExp(`\\b(${toolNames.join('|')})\\s*\\(\\s*\\{`, 'i');
+        const fnMatch = fnCallRe.exec(textOut);
+        if (fnMatch) {
+          const braceStart = textOut.indexOf('{', fnMatch.index);
+          const block = extractJsonAt(textOut, braceStart);
+          if (block) {
+            try {
+              // Coerce JS object syntax to JSON: unquoted keys, single-quoted values
+              const jsonified = block
+                .replace(/([{,]\s*)([a-zA-Z_]\w*)\s*:/g, '$1"$2":')
+                .replace(/:\s*'([^']*)'/g, ':"$1"');
+              const args = JSON.parse(jsonified);
+              toolCalls = [{ function: { name: fnMatch[1].toLowerCase(), arguments: args } }];
+            } catch {
+              // If JSON parse fails, try with the raw block
+              try {
+                const args = JSON.parse(block);
+                toolCalls = [{ function: { name: fnMatch[1].toLowerCase(), arguments: args } }];
+              } catch {}
             }
-          } catch {}
-          cursor = start + block.length;
+          }
+        }
+        // Strategy 2: look for {"name":"toolName", ...} JSON pattern
+        if (!toolCalls.length && textOut.includes('"name"')) {
+          let cursor = 0;
+          while (cursor < textOut.length) {
+            const start = textOut.indexOf('{', cursor);
+            if (start < 0) break;
+            const block = extractJsonAt(textOut, start);
+            if (!block) break;
+            try {
+              const parsed = JSON.parse(block);
+              if (parsed.name && toolNames.includes(parsed.name)) {
+                const fnArgs = parsed.arguments || parsed.parameters || parsed.args || {};
+                toolCalls = [{ function: { name: parsed.name, arguments: fnArgs } }];
+                break;
+              }
+            } catch {}
+            cursor = start + block.length;
+          }
         }
       }
       if (toolCalls.length) textOut = '';
@@ -842,6 +871,13 @@ app.get('/api/code-agent/sessions', auth, async (req, res) => {
 app.post('/api/code-agent/sessions', auth, async (req, res) => {
   try {
     const r = await codeAgentReq('/api/sessions', { method: 'POST', body: JSON.stringify(req.body || {}) });
+    res.status(r.status).json(await r.json());
+  } catch (e) { res.status(500).json({ error: String(e.message || e) }); }
+});
+
+app.patch('/api/code-agent/sessions/:id', auth, async (req, res) => {
+  try {
+    const r = await codeAgentReq(`/api/sessions/${req.params.id}`, { method: 'PATCH', body: JSON.stringify(req.body || {}) });
     res.status(r.status).json(await r.json());
   } catch (e) { res.status(500).json({ error: String(e.message || e) }); }
 });

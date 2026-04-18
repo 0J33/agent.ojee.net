@@ -80,6 +80,13 @@ app.get('/api/sessions', auth, (req, res) => {
   res.json({ active: Array.from(sessions.values()).sort((a, b) => b.lastActivityAt - a.lastActivityAt) });
 });
 
+app.patch('/api/sessions/:id', auth, (req, res) => {
+  const s = sessions.get(req.params.id);
+  if (!s) return res.status(404).json({ error: 'session not found' });
+  if (req.body.title) s.title = req.body.title.toString().slice(0, 80);
+  res.json(s);
+});
+
 app.delete('/api/sessions/:id', auth, (req, res) => {
   const ok = sessions.delete(req.params.id);
   res.json({ ok });

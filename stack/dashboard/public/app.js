@@ -58,6 +58,18 @@ const escapeHtml = (s) => s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>
 
 function renderMarkdown(text) {
   if (!text) return '';
+  // Strip Claude thinking blocks (complete and partial/streaming)
+  const T_OPEN = '<' + 'thinking>';
+  const T_CLOSE = '</' + 'thinking>';
+  text = text.split(new RegExp(T_OPEN + '[\\s\\S]*?' + T_CLOSE, 'gi')).join('');
+  // Partial open tag during streaming — drop everything from the open onward
+  const openIdx = text.toLowerCase().indexOf(T_OPEN);
+  if (openIdx !== -1) text = text.slice(0, openIdx);
+  // Orphan close tag (open was already stripped) — drop everything up to and including it
+  const closeIdx = text.toLowerCase().indexOf(T_CLOSE);
+  if (closeIdx !== -1) text = text.slice(closeIdx + T_CLOSE.length);
+  text = text.trim();
+  if (!text) return '';
   const blocks = [];
   let src = text.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
     blocks.push({ lang, code: code.replace(/\n$/, '') });
@@ -399,6 +411,20 @@ const deleteChat = async (id, e) => {
   render();
 };
 
+const renameChat = async (id, e) => {
+  if (e) e.stopPropagation();
+  const chat = state.savedChats.find(c => c.id === id);
+  const newTitle = prompt('Rename chat:', chat?.title || '');
+  if (!newTitle || newTitle === chat?.title) return;
+  const full = await api(`/api/chats/${id}`);
+  if (full) {
+    full.title = newTitle;
+    await api(`/api/chats/${id}`, { method: 'PUT', body: JSON.stringify(full) });
+    await loadSavedChats();
+    render();
+  }
+};
+
 const loadSavedChats = async () => {
   const list = await api('/api/chats');
   state.savedChats = Array.isArray(list) ? list : [];
@@ -501,7 +527,7 @@ const panelChat = () => {
         ...toolList.map(t => chip('tool', t, svgChip(t))),
         statusText ? chip('status', statusText + '\u2026', svgChip('status')) : null,
         // Always show time/duration (live timer element for streaming)
-        timeDisplay ? el('span', { class: 'chat-time' + (streaming ? ' live-timer' : ''), 'data-start': streaming ? state.chatStartTs : '' }, timeDisplay) : null
+        timeDisplay ? el('span', { class: 'chat-time' + (streaming ? ' live-timer' : ''), 'data-start': streaming ? String(state.chatStartTs) : '', 'data-prefix': streaming && timeStr ? timeStr : '' }, timeDisplay) : null
       );
       return el('div', { class: 'chat-msg chat-assistant' }, chipRow, bodyEl);
     });
@@ -585,6 +611,13 @@ const panelChat = () => {
         const last = state.chat[state.chat.length - 1];
         if (!last.content) last.content = '*(stopped)*';
         else last.content += '\n\n*(stopped)*';
+      } else if (state.chatJobId) {
+        // SSE stream dropped but server job is still running — reconnect
+        state.chatStatus = 'reconnecting';
+        persistChat();
+        render();
+        reconnectChatJob(state.chatJobId);
+        return;
       } else {
         state.chat[state.chat.length - 1].content = `Error: ${e.message}`;
       }
@@ -626,7 +659,10 @@ const panelChat = () => {
           : state.savedChats.map(c =>
               el('div', { class: 'saved-item' + (c.id === state.activeChatId ? ' active' : ''), onclick: () => loadChat(c.id) },
                 el('div', { class: 'saved-title' }, c.title),
-                el('button', { class: 'saved-del', onclick: (e) => deleteChat(c.id, e), title: 'Delete' }, '\u00D7')
+                el('div', { class: 'saved-actions' },
+                  el('button', { class: 'saved-rename', onclick: (e) => renameChat(c.id, e), title: 'Rename' }, '\u270E'),
+                  el('button', { class: 'saved-del', onclick: (e) => deleteChat(c.id, e), title: 'Delete' }, '\u00D7')
+                )
               )
             )
       )
@@ -696,6 +732,15 @@ const caSelect = async (id) => {
   render();
 };
 
+const caRename = async (id, e) => {
+  if (e) e.stopPropagation();
+  const s = state.codeAgent.sessions.find(s => s.id === id);
+  const newTitle = prompt('Rename session:', s?.title || '');
+  if (!newTitle || newTitle === s?.title) return;
+  const r = await api(`/api/code-agent/sessions/${id}`, { method: 'PATCH', body: JSON.stringify({ title: newTitle }) });
+  if (r && !r.error) await caRefreshSessions();
+};
+
 const caClose = async (id, e) => {
   if (e) e.stopPropagation();
   if (!confirm('Close this session? (Claude history is kept on disk.)')) return;
@@ -719,10 +764,20 @@ const caReconnect = async (id) => {
       state.codeAgent.status = null;
       state.codeAgent.startTs = null;
       const last = state.codeAgent.messages[state.codeAgent.messages.length - 1];
-      if (last && last.role === 'assistant' && !last.text) last.text = '*(session ended while disconnected)*';
+      if (last && last.role === 'assistant') {
+        // Strip any "Error: ..." left from a previous dropped connection
+        if (last.text) last.text = last.text.replace(/\n?\n?Error: .+$/, '').trim();
+        if (!last.text) last.text = '*(session ended while disconnected)*';
+      }
       persistCode();
       render();
       return;
+    }
+    // Server replays ALL buffered events — find the last user message index
+    // and remove everything after it so we don't duplicate assistant content.
+    const lastUserIdx = state.codeAgent.messages.reduce((acc, m, i) => m.role === 'user' ? i : acc, -1);
+    if (lastUserIdx >= 0) {
+      state.codeAgent.messages.splice(lastUserIdx + 1);
     }
     render();
     const reader = r.body.getReader();
@@ -820,7 +875,16 @@ const caSend = async (text) => {
       }
     }
   } catch (e) {
-    if (e.name !== 'AbortError') {
+    if (e.name === 'AbortError') {
+      // user clicked stop — leave as-is
+    } else if (state.codeAgent.active) {
+      // Stream dropped but session still exists — reconnect on next boot/visibility
+      state.codeAgent.status = 'reconnecting';
+      persistCode();
+      render();
+      caReconnect(state.codeAgent.active);
+      return;
+    } else {
       const last = state.codeAgent.messages[state.codeAgent.messages.length - 1];
       if (last) last.text = (last.text || '') + `\n\nError: ${e.message}`;
     }
@@ -994,25 +1058,79 @@ const panelCodeAgent = () => {
     );
   }
 
-  // Session chat view
-  const msgs = ca.messages.map((m, i) => {
+  // Session chat view — collect tool_use info per assistant turn for chips
+  const msgs = [];
+  // Group: for each assistant message, gather the tool_use entries that precede it
+  let pendingTools = [];
+  for (let i = 0; i < ca.messages.length; i++) {
+    const m = ca.messages[i];
     if (m.role === 'tool_use') {
-      const input = typeof m.input === 'object' ? JSON.stringify(m.input).slice(0, 120) : String(m.input || '').slice(0, 120);
-      return el('div', { class: 'ca-tool' }, svgChip('list_models'), el('span', {}, `${m.tool}(${input})`));
+      pendingTools.push(m);
+      // Render the tool_use row itself
+      const tinput = typeof m.input === 'object' ? JSON.stringify(m.input).slice(0, 120) : String(m.input || '').slice(0, 120);
+      msgs.push(el('div', { class: 'ca-tool' }, svgChip('list_models'), el('span', {}, `${m.tool}(${tinput})`)));
+      continue;
     }
+    if (m.role === 'user') {
+      pendingTools = [];
+      const userTime = m.ts ? el('span', { class: 'chat-time' }, fmtTime(m.ts)) : null;
+      const bodyEl = el('div', { class: 'md-body' });
+      bodyEl.textContent = m.text;
+      msgs.push(el('div', { class: 'chat-msg chat-user' },
+        el('div', { class: 'chat-label-row' }, el('div', { class: 'chat-label' }, 'user'), userTime),
+        bodyEl
+      ));
+      continue;
+    }
+    // assistant message
     const isLast = i === ca.messages.length - 1;
-    const streaming = isLast && m.role === 'assistant' && ca.busy;
-    const timeChip = m.ts && !streaming
-      ? el('span', { class: 'chat-time' }, fmtTime(m.ts) + (m.elapsed_ms ? ' \u00B7 ' + fmtDur(m.elapsed_ms) : ''))
+    const streaming = isLast && ca.busy;
+    const statusText = streaming
+      ? (ca.status && ca.status !== 'typing' && ca.status !== 'reconnecting' ? ca.status : (m.text ? 'typing' : 'thinking'))
       : null;
-    return el('div', { class: m.role === 'user' ? 'chat-msg chat-user' : 'chat-msg chat-assistant' },
-      el('div', { class: 'chat-label-row' },
-        el('div', { class: 'chat-label' }, m.role === 'user' ? 'user' : 'claude'),
-        timeChip
-      ),
-      el('div', { class: 'md-body', html: m.role === 'assistant' ? renderMarkdown(m.text) : undefined }, m.role === 'user' ? m.text : null)
+
+    // Collect tools used + file changes from preceding tool_use entries
+    const toolsUsed = [];
+    const filesChanged = [];
+    for (const tu of pendingTools) {
+      if (tu.tool && !toolsUsed.includes(tu.tool)) toolsUsed.push(tu.tool);
+      if ((tu.tool === 'Edit' || tu.tool === 'Write') && tu.input) {
+        const fp = tu.input.file_path || tu.input.path || '';
+        const short = fp.split('/').pop();
+        if (short && !filesChanged.includes(short)) filesChanged.push(short);
+      }
+    }
+    pendingTools = [];
+
+    // Time display — live timer when streaming, static when done
+    const elapsed = streaming && ca.startTs ? Date.now() - ca.startTs : m.elapsed_ms;
+    const timeStr = m.ts && !streaming ? fmtTime(m.ts) : '';
+    const durStr = elapsed != null ? fmtDur(elapsed) : '';
+    const timeDisplay = timeStr + (durStr ? ' \u00B7 ' + durStr : '');
+    const timeEl = timeDisplay || streaming
+      ? el('span', {
+          class: 'chat-time' + (streaming ? ' live-timer' : ''),
+          'data-start': streaming && ca.startTs ? String(ca.startTs) : '',
+          'data-prefix': streaming && timeStr ? timeStr : ''
+        }, timeDisplay || fmtDur(0))
+      : null;
+
+    const chipRow = el('div', { class: 'chat-chips' },
+      ...toolsUsed.map(t => chip('tool', t, svgChip(t))),
+      ...filesChanged.map(f => chip('tool', f, svgChip('read_file'))),
+      statusText ? chip('status', statusText + '\u2026', svgChip('status')) : null,
+      timeEl
     );
-  });
+
+    const bodyEl = el('div', { class: 'md-body' });
+    if (streaming && !m.text) {
+      bodyEl.appendChild(typingDots());
+    } else {
+      bodyEl.innerHTML = renderMarkdown(m.text);
+      if (streaming) bodyEl.appendChild(el('span', { class: 'typing-cursor' }, '\u258D'));
+    }
+    msgs.push(el('div', { class: 'chat-msg chat-assistant' }, chipRow, bodyEl));
+  }
 
   const input = el('textarea', { class: 'chat-input', rows: '1', placeholder: activeSession ? 'message Claude\u2026' : 'pick a session' });
   input.value = localStorage.getItem('draft_code') || '';
@@ -1033,7 +1151,10 @@ const panelCodeAgent = () => {
     el('div', { class: 'ca-sess' + (s.id === ca.active ? ' active' : ''), onclick: () => caSelect(s.id) },
       el('span', { class: 'ca-sess-title' }, s.title),
       el('span', { class: 'ca-sess-cwd' }, s.cwd.replace(/^\/media\/ojee\/NVME\/Code\/\[GIT\]\//, '')),
-      el('button', { class: 'ca-sess-del', onclick: (e) => caClose(s.id, e), title: 'Close' }, '\u00D7')
+      el('div', { class: 'saved-actions' },
+        el('button', { class: 'saved-rename', onclick: (e) => caRename(s.id, e), title: 'Rename' }, '\u270E'),
+        el('button', { class: 'ca-sess-del', onclick: (e) => caClose(s.id, e), title: 'Close' }, '\u00D7')
+      )
     )
   );
 
@@ -1076,16 +1197,16 @@ let liveTimerInterval = null;
 const startLiveTimer = () => {
   if (liveTimerInterval) clearInterval(liveTimerInterval);
   liveTimerInterval = setInterval(() => {
-    const timerEl = document.querySelector('.live-timer');
-    if (!timerEl || !state.chatBusy || !state.chatStartTs) {
-      clearInterval(liveTimerInterval);
-      liveTimerInterval = null;
-      return;
+    // Update all live-timer elements (main chat + code agent)
+    const timers = document.querySelectorAll('.live-timer');
+    if (!timers.length) { clearInterval(liveTimerInterval); liveTimerInterval = null; return; }
+    for (const timerEl of timers) {
+      const startTs = parseInt(timerEl.dataset.start, 10);
+      if (!startTs) continue;
+      const elapsed = Date.now() - startTs;
+      const prefix = timerEl.dataset.prefix || '';
+      timerEl.textContent = (prefix ? prefix + ' \u00B7 ' : '') + fmtDur(elapsed);
     }
-    const last = state.chat[state.chat.length - 1];
-    const timeStr = last?.ts ? fmtTime(last.ts) : '';
-    const elapsed = Date.now() - state.chatStartTs;
-    timerEl.textContent = (timeStr ? timeStr + ' \u00B7 ' : '') + fmtDur(elapsed);
   }, 1000);
 };
 
@@ -1164,8 +1285,8 @@ const render = () => {
   // Restore page scroll (mobile)
   if (pageScrollY) window.scrollTo(0, pageScrollY);
 
-  // Start live timer if streaming
-  if (state.chatBusy && state.chatStartTs) startLiveTimer();
+  // Start live timer if streaming (either chat type)
+  if ((state.chatBusy && state.chatStartTs) || (state.codeAgent.busy && state.codeAgent.startTs)) startLiveTimer();
 };
 
 // ─── Reconnect to background chat job ────────────────────────────────────
@@ -1181,10 +1302,21 @@ const reconnectChatJob = async (jobId) => {
       state.chatJobId = null;
       state.chatStartTs = null;
       const last = state.chat[state.chat.length - 1];
-      if (last && last.role === 'assistant' && !last.content) last.content = '*(session expired)*';
+      if (last && last.role === 'assistant') {
+        // Strip any "Error: ..." left from a previous dropped connection
+        if (last.content) last.content = last.content.replace(/\n?\n?Error: .+$/, '').trim();
+        if (!last.content) last.content = '*(session expired)*';
+      }
       persistChat();
       render();
       return;
+    }
+    // Server replays ALL buffered events — reset the last message to avoid
+    // duplicating content that was already received before the disconnect.
+    const lastMsg = state.chat[state.chat.length - 1];
+    if (lastMsg && lastMsg.role === 'assistant') {
+      lastMsg.content = '';
+      lastMsg.tools = [];
     }
     render();
     const reader = r.body.getReader();
@@ -1235,6 +1367,25 @@ const reconnectChatJob = async (jobId) => {
 };
 
 // ─── Polling ────────────────────────────────────────────────────────────
+const updateLivePanels = () => {
+  if (state.view !== 'dashboard') return;
+  const grid = document.querySelector('.grid');
+  if (!grid || grid.children.length < 3) return;
+  // Save scroll positions of the 3 live panels
+  const refs = [grid.children[0], grid.children[1], grid.children[2]];
+  const tops = refs.map(r => r.scrollTop);
+  refs[0].replaceWith(panelSystem());
+  refs[1].replaceWith(panelServices());
+  refs[2].replaceWith(panelActions());
+  for (let i = 0; i < 3; i++) grid.children[i].scrollTop = tops[i];
+  // Update header online indicator
+  const online = document.querySelector('.online');
+  if (online) {
+    online.className = state.stats ? 'online' : 'online offline';
+    online.textContent = state.stats ? 'ONLINE' : 'OFFLINE';
+  }
+};
+
 const refresh = async () => {
   if (!token) return;
   const [stats, services, models, pull] = await Promise.all([
@@ -1245,6 +1396,9 @@ const refresh = async () => {
   ]);
   if (stats) state.stats = stats;
   if (services) state.services = services;
+  if (pull) state.pull = pull.lines;
+
+  let needsRender = false;
   if (models?.models) {
     const preferred = ['llama3.1:8b', 'hermes3:8b', 'llama3.2:3b', 'qwen2.5:7b'];
     const byPref = (a, b) => {
@@ -1258,19 +1412,22 @@ const refresh = async () => {
     state.models = [...models.models].sort(byPref);
     if (!state.chatModel && state.models.length) {
       state.chatModel = state.models[0].name;
+      needsRender = true;
     }
   }
-  if (pull) state.pull = pull.lines;
   if (!state.codeAgent.checked) {
     state.codeAgent.checked = true;
     const cfg = await api('/api/code-agent/config');
+    const was = state.codeAgent.enabled;
     state.codeAgent.enabled = !!cfg?.enabled;
+    if (was !== state.codeAgent.enabled) needsRender = true;
   }
   if (state.codeAgent.enabled && !state.codeAgent.busy) {
     const s = await api('/api/code-agent/sessions');
     if (s?.active) state.codeAgent.sessions = s.active;
   }
-  render();
+  if (needsRender) render();
+  else updateLivePanels();
 };
 
 // ─── Boot ───────────────────────────────────────────────────────────────
@@ -1284,8 +1441,31 @@ const boot = async () => {
 
   // Reconnect to active background job if tab was closed/refreshed
   if (state.chatBusy && state.chatJobId) {
+    // Strip "Error: Load failed" etc. persisted from a previous dropped connection
+    const last = state.chat[state.chat.length - 1];
+    if (last && last.role === 'assistant' && last.content) {
+      last.content = last.content.replace(/\n?\n?Error: .+$/, '').trim();
+    }
+    state.chatStatus = 'reconnecting';
+    render();
     reconnectChatJob(state.chatJobId);
   }
+
+  // When the page comes back from background (mobile tab switch, lock screen),
+  // the SSE stream is often silently dead. Detect visibility change and reconnect.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible') return;
+    if (state.chatBusy && state.chatJobId) {
+      state.chatStatus = 'reconnecting';
+      render();
+      reconnectChatJob(state.chatJobId);
+    }
+    if (state.codeAgent.busy && state.codeAgent.active) {
+      state.codeAgent.status = 'reconnecting';
+      render();
+      caReconnect(state.codeAgent.active);
+    }
+  });
   // Code-agent: if we had a session, refresh history + reattach if busy
   if (state.codeAgent.active) {
     try {
