@@ -1,3 +1,4 @@
+// ─── DOM helper + utils ────────────────────────────────────────────────
 const el = (tag, attrs = {}, ...children) => {
   const n = document.createElement(tag);
   Object.entries(attrs).forEach(([k, v]) => {
@@ -7,17 +8,21 @@ const el = (tag, attrs = {}, ...children) => {
     else if (k.startsWith('on')) n.addEventListener(k.slice(2), v);
     else n.setAttribute(k, v === true ? '' : v);
   });
-  children.flat().forEach(c => { if (c == null || c === false) return;
+  children.flat().forEach(c => {
+    if (c == null || c === false) return;
     n.append(typeof c === 'string' ? document.createTextNode(c) : c);
   });
   return n;
 };
+const svg = (inner, attrs = {}) => {
+  const w = el('span', { class: attrs.class || 'icon-wrap', html: `<svg viewBox="${attrs.viewBox || '0 0 24 24'}" width="${attrs.size || 16}" height="${attrs.size || 16}" fill="none">${inner}</svg>` });
+  return w;
+};
+
 const fmtTime = (ts) => {
   if (!ts) return '';
-  const d = new Date(ts);
-  const now = new Date();
-  const sameDay = d.toDateString() === now.toDateString();
-  return sameDay
+  const d = new Date(ts), now = new Date();
+  return d.toDateString() === now.toDateString()
     ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     : d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 };
@@ -28,7 +33,7 @@ const fmtDur = (ms) => {
   const s = Math.round(ms / 1000);
   return `${Math.floor(s / 60)}m${s % 60}s`;
 };
-const fmt = (b) => {
+const fmtBytes = (b) => {
   if (!b) return '0 B';
   if (b < 1024) return b + ' B';
   if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
@@ -43,9 +48,9 @@ const fmtUp = (s) => {
 };
 const randId = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 
+// ─── Auth ──────────────────────────────────────────────────────────────
 let token = localStorage.getItem('auth_token') || '';
 const headers = () => ({ Authorization: `Bearer ${token}` });
-
 const api = async (path, opts = {}) => {
   const r = await fetch(path, { ...opts, headers: { ...headers(), 'Content-Type': 'application/json', ...(opts.headers || {}) } });
   if (r.status === 401) { logout(); return null; }
@@ -53,21 +58,16 @@ const api = async (path, opts = {}) => {
   try { return await r.json(); } catch { return null; }
 };
 
-// ─── Markdown rendering (self-contained, sanitized) ─────────────────────
-const escapeHtml = (s) => s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-
+// ─── Markdown (sanitized) ──────────────────────────────────────────────
+const escapeHtml = (s) => s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 function renderMarkdown(text) {
   if (!text) return '';
-  // Strip Claude thinking blocks (complete and partial/streaming)
-  const T_OPEN = '<' + 'thinking>';
-  const T_CLOSE = '</' + 'thinking>';
+  const T_OPEN = '<' + 'thinking>', T_CLOSE = '</' + 'thinking>';
   text = text.split(new RegExp(T_OPEN + '[\\s\\S]*?' + T_CLOSE, 'gi')).join('');
-  // Partial open tag during streaming — drop everything from the open onward
-  const openIdx = text.toLowerCase().indexOf(T_OPEN);
-  if (openIdx !== -1) text = text.slice(0, openIdx);
-  // Orphan close tag (open was already stripped) — drop everything up to and including it
-  const closeIdx = text.toLowerCase().indexOf(T_CLOSE);
-  if (closeIdx !== -1) text = text.slice(closeIdx + T_CLOSE.length);
+  const oi = text.toLowerCase().indexOf(T_OPEN);
+  if (oi !== -1) text = text.slice(0, oi);
+  const ci = text.toLowerCase().indexOf(T_CLOSE);
+  if (ci !== -1) text = text.slice(ci + T_CLOSE.length);
   text = text.trim();
   if (!text) return '';
   const blocks = [];
@@ -86,9 +86,9 @@ function renderMarkdown(text) {
   src = src.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
            .replace(/(^|\s)\*([^*\n]+)\*/g, '$1<em>$2</em>')
            .replace(/(^|\s)_([^_\n]+)_/g, '$1<em>$2</em>');
-  src = src.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_, text, url) => {
-    const safe = /^(https?:|mailto:|\/)/.test(url) ? url : '#';
-    return `<a href="${safe}" target="_blank" rel="noopener noreferrer">${text}</a>`;
+  src = src.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_, t, u) => {
+    const safe = /^(https?:|mailto:|\/)/.test(u) ? u : '#';
+    return `<a href="${safe}" target="_blank" rel="noopener noreferrer">${t}</a>`;
   });
   src = src.replace(/(?:^[ \t]*[-*]\s+.+(?:\n|$))+/gm, block => {
     const items = block.trim().split(/\n/).map(l => `<li>${l.replace(/^[ \t]*[-*]\s+/, '')}</li>`).join('');
@@ -108,102 +108,157 @@ function renderMarkdown(text) {
   }).join('');
   src = src.replace(/\u0000CODEBLOCK(\d+)\u0000/g, (_, i) => {
     const b = blocks[+i];
-    const escCode = escapeHtml(b.code);
     const langAttr = b.lang ? ` data-lang="${escapeHtml(b.lang)}"` : '';
-    return `<pre class="md-code"${langAttr}><code>${escCode}</code></pre>`;
+    return `<pre class="md-code"${langAttr}><code>${escapeHtml(b.code)}</code></pre>`;
   });
   return src;
 }
 
-// ─── Icon ───────────────────────────────────────────────────────────────
+// ─── Icons ─────────────────────────────────────────────────────────────
 const brandIcon = (cls) => {
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('viewBox', '0 0 24 24');
-  svg.setAttribute('class', cls || 'brand-icon');
-  svg.innerHTML = '<path fill="#00aaaa" d="m11 14.5c0 .828-.672 1.5-1.5 1.5s-1.5-.672-1.5-1.5.672-1.5 1.5-1.5 1.5.672 1.5 1.5zm3.5-1.5c-.828 0-1.5.672-1.5 1.5s.672 1.5 1.5 1.5 1.5-.672 1.5-1.5-.672-1.5-1.5-1.5zm5.5 0v3c.008.585-.55 1.108-1.134.973-.438 1.735-1.998 3.027-3.866 3.027h-6c-1.868 0-3.429-1.292-3.866-3.027-.583.135-1.141-.388-1.134-.973v-3c-.008-.585.55-1.108 1.134-.973.438-1.734 1.998-3.027 3.866-3.027h2v-1c0-.553.448-1 1-1s1 .447 1 1v1h2c1.868 0 3.429 1.292 3.866 3.027.583-.135 1.141.388 1.134.973zm-3 0c0-1.103-.897-2-2-2h-6c-1.103 0-2 .897-2 2v3c0 1.103.897 2 2 2h6c1.103 0 2-.897 2-2zm7-3.276v9.276c0 2.757-2.243 5-5 5h-14c-2.757 0-5-2.243-5-5v-9.276c0-1.665.824-3.214 2.204-4.145l6.999-4.724c1.699-1.146 3.895-1.146 5.594 0l7 4.724c1.379.931 2.203 2.479 2.203 4.145zm-2 0c0-.999-.494-1.928-1.322-2.486l-7-4.724c-.509-.345-1.094-.517-1.678-.517s-1.168.172-1.678.517l-7 4.723c-.828.559-1.322 1.487-1.322 2.486v9.276c0 1.654 1.346 3 3 3h14c1.654 0 3-1.346 3-3z"/>';
-  return svg;
+  const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  s.setAttribute('viewBox', '0 0 24 24');
+  s.setAttribute('class', cls || 'brand-icon');
+  s.innerHTML = '<path fill="#06b6d4" d="m11 14.5c0 .828-.672 1.5-1.5 1.5s-1.5-.672-1.5-1.5.672-1.5 1.5-1.5 1.5.672 1.5 1.5zm3.5-1.5c-.828 0-1.5.672-1.5 1.5s.672 1.5 1.5 1.5 1.5-.672 1.5-1.5-.672-1.5-1.5-1.5zm5.5 0v3c.008.585-.55 1.108-1.134.973-.438 1.735-1.998 3.027-3.866 3.027h-6c-1.868 0-3.429-1.292-3.866-3.027-.583.135-1.141-.388-1.134-.973v-3c-.008-.585.55-1.108 1.134-.973.438-1.734 1.998-3.027 3.866-3.027h2v-1c0-.553.448-1 1-1s1 .447 1 1v1h2c1.868 0 3.429 1.292 3.866 3.027.583-.135 1.141.388 1.134.973zm-3 0c0-1.103-.897-2-2-2h-6c-1.103 0-2 .897-2 2v3c0 1.103.897 2 2 2h6c1.103 0 2-.897 2-2zm7-3.276v9.276c0 2.757-2.243 5-5 5h-14c-2.757 0-5-2.243-5-5v-9.276c0-1.665.824-3.214 2.204-4.145l6.999-4.724c1.699-1.146 3.895-1.146 5.594 0l7 4.724c1.379.931 2.203 2.479 2.203 4.145zm-2 0c0-.999-.494-1.928-1.322-2.486l-7-4.724c-.509-.345-1.094-.517-1.678-.517s-1.168.172-1.678.517l-7 4.723c-.828.559-1.322 1.487-1.322 2.486v9.276c0 1.654 1.346 3 3 3h14c1.654 0 3-1.346 3-3z"/>';
+  return s;
 };
 
-// ─── Login ──────────────────────────────────────────────────────────────
+const ICONS = {
+  cpu:      '<rect x="4" y="4" width="16" height="16" rx="2" stroke="currentColor" stroke-width="1.6"/><rect x="9" y="9" width="6" height="6" stroke="currentColor" stroke-width="1.6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>',
+  ram:      '<rect x="2" y="7" width="20" height="10" rx="1" stroke="currentColor" stroke-width="1.6"/><path d="M6 7v10M10 7v10M14 7v10M18 7v10" stroke="currentColor" stroke-width="1.2"/>',
+  disk:     '<ellipse cx="12" cy="5" rx="9" ry="3" stroke="currentColor" stroke-width="1.6"/><path d="M3 5v14a9 3 0 0 0 18 0V5M3 12a9 3 0 0 0 18 0" stroke="currentColor" stroke-width="1.6" fill="none"/>',
+  gpu:      '<rect x="2" y="6" width="20" height="12" rx="2" stroke="currentColor" stroke-width="1.6"/><circle cx="8" cy="12" r="2.5" stroke="currentColor" stroke-width="1.4"/><circle cx="16" cy="12" r="2.5" stroke="currentColor" stroke-width="1.4"/>',
+  net:      '<path d="M2 12c5-7 15-7 20 0M5 16c3-4 11-4 14 0M9 19c1-1 5-1 6 0" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/>',
+  temp:     '<path d="M14 14V5a2 2 0 0 0-4 0v9a4 4 0 1 0 4 0z" stroke="currentColor" stroke-width="1.6" fill="none"/><circle cx="12" cy="17" r="1" fill="currentColor"/>',
+  reload:   '<path d="M21 12a9 9 0 1 1-3-6.7L21 8M21 3v5h-5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
+  download: '<path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
+  power:    '<path d="M12 2v10M5 6.3a9 9 0 1 0 14 0" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/>',
+  arrow:    '<path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
+  plus:     '<path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
+  trash:    '<path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6h14z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/>',
+  pencil:   '<path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
+  send:     '<path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
+  stop:     '<rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/>',
+  spark:    '<path d="M12 2l2.39 7.36H22l-6.18 4.49L18.21 21 12 16.51 5.79 21l2.39-7.15L2 9.36h7.61L12 2z" fill="currentColor"/>',
+  message:  '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v10z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" fill="none"/>',
+  code:     '<path d="M16 18l6-6-6-6M8 6l-6 6 6 6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
+  folder:   '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" fill="none"/>',
+  history:  '<path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5M12 7v5l3 2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
+  list:     '<path d="M8 6h13M8 12h13M8 18h13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="3.5" cy="6" r="1" fill="currentColor"/><circle cx="3.5" cy="12" r="1" fill="currentColor"/><circle cx="3.5" cy="18" r="1" fill="currentColor"/>',
+  search:   '<circle cx="11" cy="11" r="6" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M16 16l5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
+  globe:    '<circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.6" fill="none"/><path d="M3 12h18M12 3a13 13 0 0 1 0 18M12 3a13 13 0 0 0 0 18" stroke="currentColor" stroke-width="1.6" fill="none"/>',
+  file:     '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" fill="none"/><path d="M14 2v6h6" stroke="currentColor" stroke-width="1.6"/>',
+  workflow: '<circle cx="5" cy="5" r="2.5" fill="currentColor"/><circle cx="12" cy="12" r="2.5" fill="currentColor"/><circle cx="19" cy="5" r="2.5" fill="currentColor"/><circle cx="19" cy="19" r="2.5" fill="currentColor"/><path d="M7 6l4 5M17 7l-4 4M14 13l4 5" stroke="currentColor" stroke-width="1.4" fill="none"/>',
+  spinner:  '<circle cx="12" cy="12" r="8" stroke="currentColor" stroke-width="2" stroke-dasharray="12 6" stroke-linecap="round" fill="none"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1.2s" repeatCount="indefinite"/></circle>',
+  chart:    '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/>',
+  tools:    '<path d="M14.7 6.3a4 4 0 0 1-5.7 5.7L3 18l3 3 6-6a4 4 0 0 1 5.7-5.7l-3-3z M5 21l7-7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
+  link:     '<path d="M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/>',
+  settings: '<circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.6" fill="none"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 0 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 0 1-4 0v-.1a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 0 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 0 1 0-4h.1a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 0 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3 1.6 1.6 0 0 0 1-1.5V3a2 2 0 0 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 0 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8 1.6 1.6 0 0 0 1.5 1H21a2 2 0 0 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z" stroke="currentColor" stroke-width="1.4" fill="none"/>',
+  logout:   '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
+  copy:     '<rect x="9" y="9" width="13" height="13" rx="2" stroke="currentColor" stroke-width="1.6" fill="none"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" stroke="currentColor" stroke-width="1.6" fill="none"/>',
+};
+const ico = (name, size = 16) => svg(ICONS[name] || '', { size });
+
+// Tool name → icon mapping for chat chips
+const TOOL_ICON = {
+  web_search: 'search', web_fetch: 'globe',
+  get_stats: 'chart', get_services: 'list', list_models: 'list',
+  read_file: 'file', list_dir: 'folder',
+};
+const TOOL_LABELS = {
+  web_search: 'Web search', web_fetch: 'Web page',
+  get_stats: 'System stats', get_services: 'Services', list_models: 'Models',
+  read_file: 'File read', list_dir: 'Directory',
+  n8n_list_workflows: 'List workflows', n8n_get_workflow: 'Read workflow',
+  n8n_create_workflow: 'New workflow', n8n_update_workflow: 'Update workflow',
+  n8n_activate_workflow: 'Activate workflow', n8n_deactivate_workflow: 'Deactivate workflow',
+  n8n_quick_workflow: 'Build workflow',
+};
+const toolIcon = (name) => name && name.startsWith('n8n_') ? 'workflow' : (TOOL_ICON[name] || 'tools');
+const toolLabel = (name) => TOOL_LABELS[name] || name.replace(/_/g, ' ');
+
+// ─── Login ─────────────────────────────────────────────────────────────
 const renderLogin = () => {
   document.body.innerHTML = '';
   const err = el('div', { class: 'login-err' });
   const input = el('input', { type: 'password', placeholder: 'Password', class: 'login-input', autofocus: true });
   const form = el('form', {
-    class: 'login-box',
-    autocomplete: 'off',
+    class: 'login-box', autocomplete: 'off',
     onsubmit: async (e) => {
       e.preventDefault();
       try {
         const r = await fetch('/api/auth', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ password: input.value })
+          body: JSON.stringify({ password: input.value }),
         });
         const d = await r.json();
         if (d.token) { token = d.token; localStorage.setItem('auth_token', token); boot(); }
         else err.textContent = 'Invalid password';
       } catch { err.textContent = 'Connection failed'; }
-    }
+    },
   },
     brandIcon('login-logo'),
     el('div', { class: 'login-title' }, 'AGENT'),
     input,
     el('button', { type: 'submit', class: 'login-btn' }, 'Authenticate'),
-    err
+    err,
   );
   document.body.append(el('div', { class: 'login-wrap' }, form));
   input.focus();
 };
-
 const logout = () => { token = ''; localStorage.removeItem('auth_token'); renderLogin(); };
 
-// ─── State ──────────────────────────────────────────────────────────────
+// ─── State ─────────────────────────────────────────────────────────────
+const HISTORY_LEN = 60;
 let state = {
-  view: (location.hash.replace(/^#\/?/, '') || 'dashboard'),
+  view: location.hash.replace(/^#\/?/, '') || 'dashboard',  // mobile section
   stats: null, services: null, models: [], pull: [],
+  history: { cpu: [], ram: [], net_in: [], net_out: [], disk_read: [], disk_write: [] },
   chat: [], chatModel: '', chatBusy: false, chatStatus: null,
   savedChats: [], activeChatId: null, chatDirty: false, showSavedList: false,
   chatJobId: null, chatStartTs: null,
   actionMsg: '',
-  codeAgent: { enabled: false, sessions: [], active: null, messages: [], busy: false, status: null, abort: null,
-    pickerOpen: false, pickerPath: '/media/ojee/NVME/Code/[GIT]/Claude', pickerEntries: [], pickerParent: null,
-    historyOpen: false, historyList: [], historyView: null, historyMessages: [], historyShowTools: false },
+  toasts: [],
+  chatMode: localStorage.getItem('chat_mode') || 'chat',  // 'chat' | 'code'
+  codeAgent: {
+    enabled: false, checked: false,
+    sessions: [], active: null, messages: [],
+    busy: false, status: null, startTs: null,
+    pickerOpen: false,
+    pickerPath: '/media/ojee/NVME/Code/[GIT]/Claude',
+    pickerEntries: [], pickerParent: null,
+    historyOpen: false, historyList: [],
+    historyView: null, historyMessages: [], historyShowTools: false, historyCwd: null,
+  },
 };
 
-// ─── localStorage persistence ───────────────────────────────────────────
+// ─── Persistence ───────────────────────────────────────────────────────
 const persistChat = () => {
   try {
     localStorage.setItem('chat_state', JSON.stringify({
-      chat: state.chat,
-      chatModel: state.chatModel,
-      activeChatId: state.activeChatId,
-      chatDirty: state.chatDirty,
-      chatJobId: state.chatJobId,
-      chatBusy: state.chatBusy,
-      chatStartTs: state.chatStartTs,
+      chat: state.chat, chatModel: state.chatModel, activeChatId: state.activeChatId,
+      chatDirty: state.chatDirty, chatJobId: state.chatJobId,
+      chatBusy: state.chatBusy, chatStartTs: state.chatStartTs,
     }));
   } catch {}
 };
-
 const restoreChat = () => {
   try {
-    const saved = JSON.parse(localStorage.getItem('chat_state'));
-    if (saved && saved.chat && saved.chat.length) {
-      state.chat = saved.chat;
-      state.chatModel = saved.chatModel || '';
-      state.activeChatId = saved.activeChatId || null;
-      state.chatDirty = saved.chatDirty || false;
-      state.chatJobId = saved.chatJobId || null;
-      // If was busy, try to reconnect
-      if (saved.chatBusy && saved.chatJobId) {
+    const s = JSON.parse(localStorage.getItem('chat_state'));
+    if (s && s.chat && s.chat.length) {
+      state.chat = s.chat;
+      state.chatModel = s.chatModel || '';
+      state.activeChatId = s.activeChatId || null;
+      state.chatDirty = s.chatDirty || false;
+      state.chatJobId = s.chatJobId || null;
+      if (s.chatBusy && s.chatJobId) {
         state.chatBusy = true;
-        state.chatStartTs = saved.chatStartTs || null;
+        state.chatStartTs = s.chatStartTs || null;
         state.chatStatus = 'reconnecting';
       }
     }
   } catch {}
 };
-
 const persistCode = () => {
   try {
     localStorage.setItem('code_state', JSON.stringify({
@@ -214,16 +269,15 @@ const persistCode = () => {
     }));
   } catch {}
 };
-
 const restoreCode = () => {
   try {
-    const saved = JSON.parse(localStorage.getItem('code_state'));
-    if (saved && saved.active) {
-      state.codeAgent.active = saved.active;
-      state.codeAgent.messages = saved.messages || [];
-      if (saved.busy) {
+    const s = JSON.parse(localStorage.getItem('code_state'));
+    if (s && s.active) {
+      state.codeAgent.active = s.active;
+      state.codeAgent.messages = s.messages || [];
+      if (s.busy) {
         state.codeAgent.busy = true;
-        state.codeAgent.startTs = saved.startTs || null;
+        state.codeAgent.startTs = s.startTs || null;
         state.codeAgent.status = 'reconnecting';
       }
     }
@@ -234,139 +288,239 @@ window.addEventListener('hashchange', () => {
   state.view = location.hash.replace(/^#\/?/, '') || 'dashboard';
   render();
 });
-
-const setView = (v) => {
+const setMobileView = (v) => {
   state.view = v;
   history.replaceState(null, '', '#/' + v);
   render();
 };
 
-// ─── Header ─────────────────────────────────────────────────────────────
-const renderHeader = (stats) => el('div', { class: 'header' },
-  el('div', { class: 'brand-wrap' },
-    brandIcon(),
-    el('span', { class: 'brand' }, 'AGENT')
-  ),
-  el('nav', { class: 'top-nav' },
-    el('button', { class: 'nav-btn' + (state.view === 'dashboard' ? ' active' : ''), onclick: () => setView('dashboard') }, 'Dashboard'),
-    state.codeAgent.enabled
-      ? el('button', { class: 'nav-btn' + (state.view === 'code' ? ' active' : ''), onclick: () => setView('code') }, 'Claude Code')
-      : null
-  ),
-  el('div', { class: 'header-right' },
-    el('span', { class: stats ? 'online' : 'online offline' }, stats ? 'ONLINE' : 'OFFLINE'),
-    el('button', { class: 'logout', onclick: logout }, 'Logout')
-  )
-);
-
-// ─── Panels ─────────────────────────────────────────────────────────────
-const statRow = (label, val, warn) =>
-  el('div', { class: 'stat-row' },
-    el('span', { class: 'stat-label' }, label),
-    el('span', { class: warn ? 'stat-val warn' : 'stat-val' }, val)
-  );
-
-const bar = (label, pct) => {
-  const warn = pct > 85;
-  return [
-    el('div', { class: 'bar-label' }, `${label} ${pct.toFixed(0)}%`),
-    el('div', { class: 'bar' }, el('div', { class: warn ? 'bar-fill warn' : 'bar-fill', style: `width:${pct}%` }))
-  ];
+// ─── Toasts ────────────────────────────────────────────────────────────
+const toast = (msg, kind = 'info', dur = 3500) => {
+  const id = randId();
+  state.toasts.push({ id, msg, kind });
+  renderToasts();
+  setTimeout(() => {
+    state.toasts = state.toasts.filter(t => t.id !== id);
+    renderToasts();
+  }, dur);
+};
+const renderToasts = () => {
+  let stack = document.querySelector('.toast-stack');
+  if (!stack) {
+    stack = el('div', { class: 'toast-stack' });
+    document.body.appendChild(stack);
+  }
+  stack.innerHTML = '';
+  for (const t of state.toasts) {
+    stack.appendChild(el('div', { class: `toast ${t.kind}` }, t.msg));
+  }
 };
 
+// ─── Header ────────────────────────────────────────────────────────────
+const renderHeader = () => el('div', { class: 'header' },
+  el('div', { class: 'brand-wrap' }, brandIcon(), el('span', { class: 'brand' }, 'AGENT')),
+  el('div', { class: 'header-right' },
+    el('span', { class: state.stats ? 'status-pill' : 'status-pill offline' }, state.stats ? 'Online' : 'Offline'),
+    el('button', { class: 'btn ghost icon', onclick: logout, title: 'Logout' }, ico('logout', 16)),
+  ),
+);
+
+// ─── Bottom-tab nav (mobile) ───────────────────────────────────────────
+const renderBottomTabs = () => {
+  const tab = (id, label, icon) => el('button', {
+    class: 'bottom-tab' + (state.view === id ? ' active' : ''),
+    onclick: () => setMobileView(id),
+  }, ico(icon, 22), el('span', {}, label));
+  return el('div', { class: 'bottom-tabs' },
+    tab('dashboard', 'Stats', 'chart'),
+    tab('services', 'Services', 'list'),
+    tab('actions', 'Actions', 'tools'),
+    tab('chat', 'Chat', 'message'),
+  );
+};
+
+// ─── SVG primitives: gauge + sparkline ─────────────────────────────────
+// Returns a circular gauge SVG (arc fills based on percent 0-100)
+const gaugeSvg = (pct, color = 'var(--accent)') => {
+  const r = 30, cx = 38, cy = 38;
+  const circ = 2 * Math.PI * r;
+  const dash = (Math.max(0, Math.min(100, pct)) / 100) * circ;
+  return `<svg viewBox="0 0 76 76" width="76" height="76">
+    <circle class="gauge-track" cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke-width="6"/>
+    <circle class="gauge-fill" cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke-width="6"
+      stroke-dasharray="${dash} ${circ}" stroke-linecap="round"
+      transform="rotate(-90 ${cx} ${cy})" style="stroke:${color}"/>
+    <text class="gauge-text" x="50%" y="50%" dominant-baseline="middle" text-anchor="middle">${Math.round(pct)}%</text>
+  </svg>`;
+};
+const gauge = (label, pct, sub) => {
+  const cls = pct > 90 ? ' danger' : pct > 75 ? ' warn' : '';
+  return el('div', { class: 'gauge' + cls, html: `${gaugeSvg(pct)}<div class="gauge-label">${escapeHtml(label)}</div>${sub ? `<div class="gauge-sub">${escapeHtml(sub)}</div>` : ''}` });
+};
+
+// Sparkline SVG from values array (auto-scaled)
+const sparkSvg = (values, color = 'var(--accent)') => {
+  if (!values.length) return '<svg viewBox="0 0 100 32" width="100%" height="32"></svg>';
+  const w = 100, h = 32, pad = 2;
+  const max = Math.max(...values, 1);
+  const min = Math.min(...values, 0);
+  const range = Math.max(max - min, 1);
+  const step = (w - pad * 2) / Math.max(values.length - 1, 1);
+  const pts = values.map((v, i) => {
+    const x = pad + i * step;
+    const y = pad + (h - pad * 2) * (1 - (v - min) / range);
+    return `${x.toFixed(2)},${y.toFixed(2)}`;
+  });
+  const line = `M${pts.join(' L')}`;
+  const fill = `${line} L${(pad + (values.length - 1) * step).toFixed(2)},${h - pad} L${pad},${h - pad} Z`;
+  return `<svg viewBox="0 0 ${w} ${h}" width="100%" height="${h}" preserveAspectRatio="none">
+    <path d="${fill}" class="sparkline-fill"/>
+    <path d="${line}" class="sparkline-line" style="stroke:${color}"/>
+  </svg>`;
+};
+const sparklineCard = (label, value, values, color) =>
+  el('div', { class: 'sparkline-card', html: `
+    <div class="sparkline-card-head"><span>${escapeHtml(label)}</span><span class="sparkline-card-val">${escapeHtml(value)}</span></div>
+    ${sparkSvg(values, color)}
+  ` });
+
+// ─── Panels ────────────────────────────────────────────────────────────
 const panelSystem = () => {
   const s = state.stats;
-  if (!s) return el('div', { class: 'panel' }, el('div', { class: 'panel-head' }, 'System'), el('div', { class: 'muted' }, 'loading\u2026'));
+  if (!s) {
+    return el('div', { class: 'panel', 'data-panel': 'dashboard' },
+      el('div', { class: 'panel-head' }, el('span', {}, 'System')),
+      el('div', { class: 'gauge-grid' },
+        el('div', { class: 'skeleton skeleton-gauge' }),
+        el('div', { class: 'skeleton skeleton-gauge' }),
+        el('div', { class: 'skeleton skeleton-gauge' }),
+        el('div', { class: 'skeleton skeleton-gauge' }),
+      ),
+      el('div', { class: 'skeleton skeleton-row' }),
+      el('div', { class: 'skeleton skeleton-row' }),
+      el('div', { class: 'skeleton skeleton-row' }),
+    );
+  }
+
   const cpuTemp = (s.temps || []).find(t => t.label === 'CPU Package');
   const g = s.gpu;
   const d = s.disk;
   const diskIO = (d.read_per_s != null || d.write_per_s != null)
-    ? `\u2191${fmt(d.write_per_s || 0)}/s \u2193${fmt(d.read_per_s || 0)}/s` : null;
-  return el('div', { class: 'panel' },
-    el('div', { class: 'panel-head' }, 'System'),
-    statRow('Uptime', fmtUp(s.uptime)),
-    statRow('OS', s.os),
-    statRow('CPU', s.cpu.model),
-    statRow('CPU Load', `${s.cpu.physical}c/${s.cpu.cores}t \u2014 ${s.cpu.avg.toFixed(0)}%`),
-    cpuTemp ? statRow('CPU Temp', `${cpuTemp.current}\u00B0C`, cpuTemp.current > 80) : null,
-    g ? statRow('GPU', `${g.vendor ? g.vendor + ' ' : ''}${g.model}`) : null,
-    g && g.util != null ? statRow('GPU Load', `${g.util}%${g.vram_mb ? ` \u00B7 ${(g.vram_mb / 1024).toFixed(1)} GB VRAM` : ''}`) : null,
-    g && g.temp != null ? statRow('GPU Temp', `${g.temp}\u00B0C`, g.temp > 85) : null,
-    statRow('RAM', `${fmt(s.memory.used)} / ${fmt(s.memory.total)} (${s.memory.percent}%)`),
-    statRow('Swap', `${fmt(s.swap.used)} / ${fmt(s.swap.total)}`),
-    statRow('Disk /', `${fmt(s.disk.used)} / ${fmt(s.disk.total)} (${s.disk.percent}%)`),
-    s.home ? statRow('Disk /home', `${fmt(s.home.used)} / ${fmt(s.home.total)} (${s.home.percent}%)`) : null,
-    diskIO ? statRow('Disk I/O', diskIO) : null,
-    statRow('Network', `\u2191${fmt(s.network.sent_per_s)}/s \u2193${fmt(s.network.recv_per_s)}/s`),
-    ...bar('CPU', s.cpu.avg),
-    g && g.util != null ? bar('GPU', g.util) : [],
-    ...bar('RAM', s.memory.percent),
-    ...bar('Disk /', s.disk.percent),
-    s.home ? bar('Disk /home', s.home.percent) : []
+    ? `↑${fmtBytes(d.write_per_s || 0)}/s ↓${fmtBytes(d.read_per_s || 0)}/s` : null;
+  const netStr = `↑${fmtBytes(s.network.sent_per_s)}/s ↓${fmtBytes(s.network.recv_per_s)}/s`;
+
+  const gauges = el('div', { class: 'gauge-grid' },
+    gauge('CPU', s.cpu.avg, `${s.cpu.physical}c · ${cpuTemp ? cpuTemp.current + '°C' : ''}`),
+    gauge('RAM', s.memory.percent, `${fmtBytes(s.memory.used)} / ${fmtBytes(s.memory.total)}`),
+    gauge('Disk /', s.disk.percent, `${fmtBytes(s.disk.used)} / ${fmtBytes(s.disk.total)}`),
+    g && g.util != null ? gauge('GPU', g.util, `${g.temp != null ? g.temp + '°C' : ''}${g.vram_mb ? ` · ${(g.vram_mb / 1024).toFixed(1)}G` : ''}`)
+      : (s.home ? gauge('Disk /home', s.home.percent, `${fmtBytes(s.home.used)} / ${fmtBytes(s.home.total)}`) : null),
+  );
+
+  const cpuVals = state.history.cpu;
+  const ramVals = state.history.ram;
+
+  const sparks = el('div', { class: 'sparkline-row' },
+    sparklineCard('CPU 5m', `${s.cpu.avg.toFixed(0)}%`, cpuVals),
+    sparklineCard('RAM 5m', `${s.memory.percent}%`, ramVals),
+  );
+
+  const detail = el('div', { class: 'stat-list' },
+    el('div', { class: 'stat-row' }, el('span', { class: 'stat-label' }, 'Uptime'), el('span', { class: 'stat-val' }, fmtUp(s.uptime))),
+    el('div', { class: 'stat-row' }, el('span', { class: 'stat-label' }, 'OS'), el('span', { class: 'stat-val' }, s.os)),
+    el('div', { class: 'stat-row' }, el('span', { class: 'stat-label' }, 'CPU'), el('span', { class: 'stat-val' }, s.cpu.model)),
+    g ? el('div', { class: 'stat-row' }, el('span', { class: 'stat-label' }, 'GPU'), el('span', { class: 'stat-val' }, `${g.vendor ? g.vendor + ' ' : ''}${g.model}`)) : null,
+    el('div', { class: 'stat-row' }, el('span', { class: 'stat-label' }, 'Swap'), el('span', { class: 'stat-val' }, `${fmtBytes(s.swap.used)} / ${fmtBytes(s.swap.total)}`)),
+    s.home && g && g.util != null ? el('div', { class: 'stat-row' }, el('span', { class: 'stat-label' }, 'Disk /home'), el('span', { class: 'stat-val' }, `${fmtBytes(s.home.used)} / ${fmtBytes(s.home.total)} (${s.home.percent}%)`)) : null,
+    diskIO ? el('div', { class: 'stat-row' }, el('span', { class: 'stat-label' }, 'Disk I/O'), el('span', { class: 'stat-val mono' }, diskIO)) : null,
+    el('div', { class: 'stat-row' }, el('span', { class: 'stat-label' }, 'Network'), el('span', { class: 'stat-val mono' }, netStr)),
+  );
+
+  return el('div', { class: 'panel', 'data-panel': 'dashboard' },
+    el('div', { class: 'panel-head' },
+      el('span', {}, 'System'),
+      el('span', { class: 'head-actions' }, ico('cpu', 14)),
+    ),
+    gauges,
+    sparks,
+    detail,
   );
 };
 
 const panelServices = () => {
-  const sv = state.services || {};
-  return el('div', { class: 'panel' },
-    el('div', { class: 'panel-head' }, 'Services'),
-    ...Object.entries(sv).map(([name, s]) =>
-      el('div', { class: 'svc-row' },
-        el('span', { class: s.active ? 'svc-dot' : 'svc-dot off' }),
-        el('div', { class: 'svc-info' },
-          el('div', { class: 'svc-name' }, s.desc || name),
-          el('div', { class: 'svc-meta' }, s.status || (s.active ? 'Running' : 'Stopped'))
-        )
-      )
-    )
-  );
-};
-
-const doAction = async (action) => {
-  state.actionMsg = `Running ${action}\u2026`; render();
-  const d = await api('/api/action', { method: 'POST', body: JSON.stringify({ action }) });
-  state.actionMsg = d?.ok ? `${action}: OK` : `${action}: ${d?.stderr || d?.error || 'failed'}`;
-  render();
-  setTimeout(() => { state.actionMsg = ''; render(); }, 4000);
-};
-
-const panelActions = () => {
-  return el('div', { class: 'panel' },
-    el('div', { class: 'panel-head' }, 'Actions'),
-    el('div', { class: 'btn-row' },
-      el('button', { class: 'btn', onclick: () => doAction('restart-openwebui') }, 'Restart WebUI'),
-      el('button', { class: 'btn', onclick: () => doAction('restart-n8n') }, 'Restart n8n'),
-      el('button', { class: 'btn', onclick: () => doAction('restart-dashboard') }, 'Restart Dashboard'),
-      el('button', { class: 'btn', onclick: () => doAction('pull-images') }, 'Pull Images'),
-      el('button', { class: 'btn', onclick: () => doAction('compose-up') }, 'Compose Up'),
-      el('button', { class: 'btn', onclick: () => doAction('compose-down') }, 'Compose Down')
+  const sv = state.services;
+  if (!sv) {
+    return el('div', { class: 'panel', 'data-panel': 'services' },
+      el('div', { class: 'panel-head' }, el('span', {}, 'Services')),
+      el('div', { class: 'svc-list' },
+        el('div', { class: 'skeleton skeleton-row' }),
+        el('div', { class: 'skeleton skeleton-row' }),
+        el('div', { class: 'skeleton skeleton-row' }),
+      ),
+    );
+  }
+  return el('div', { class: 'panel', 'data-panel': 'services' },
+    el('div', { class: 'panel-head' }, el('span', {}, 'Services')),
+    el('div', { class: 'svc-list' },
+      ...Object.entries(sv).map(([name, s]) =>
+        el('div', { class: 'svc-card' },
+          el('span', { class: s.active ? 'svc-dot' : 'svc-dot off' }),
+          el('div', { class: 'svc-info' },
+            el('div', { class: 'svc-name' }, s.desc || name),
+            el('div', { class: 'svc-meta' }, s.status || (s.active ? 'Running' : 'Stopped')),
+          ),
+        ),
+      ),
     ),
-    state.actionMsg ? el('div', { class: 'action-msg' }, state.actionMsg) : null,
-    el('div', { class: 'panel-head sub' }, 'Model Pull Progress'),
-    el('div', { class: 'pull-box' }, (state.pull || []).join('\n') || 'no active pull'),
-    el('div', { class: 'panel-head sub' }, 'Quick Links'),
-    el('a', { class: 'link-btn', href: 'https://chat.agent.ojee.net', target: '_blank' }, 'Open WebUI \u2192', el('div', { class: 'link-sub' }, 'Full chat interface (with RAG)')),
-    el('a', { class: 'link-btn', href: 'https://flow.agent.ojee.net', target: '_blank' }, 'n8n \u2192', el('div', { class: 'link-sub' }, 'Workflow automation'))
   );
 };
 
-// ─── Chat actions ───────────────────────────────────────────────────────
+const doAction = async (action, label) => {
+  const tid = randId();
+  state.toasts.push({ id: tid, msg: el('span', { class: 'mono' }, ico('spinner', 14), ' ', label || action), kind: 'info' });
+  renderToasts();
+  const d = await api('/api/action', { method: 'POST', body: JSON.stringify({ action }) });
+  state.toasts = state.toasts.filter(t => t.id !== tid);
+  if (d?.ok) toast(`${label || action}: OK`, 'success');
+  else toast(`${label || action}: ${d?.stderr || d?.error || 'failed'}`, 'danger', 6000);
+};
+
+const panelActions = () => el('div', { class: 'panel', 'data-panel': 'actions' },
+  el('div', { class: 'panel-head' }, el('span', {}, 'Actions')),
+  el('div', { class: 'btn-row' },
+    el('button', { class: 'btn', onclick: () => doAction('restart-openwebui', 'Restart WebUI') }, ico('reload'), ' WebUI'),
+    el('button', { class: 'btn', onclick: () => doAction('restart-n8n', 'Restart n8n') }, ico('reload'), ' n8n'),
+    el('button', { class: 'btn', onclick: () => doAction('restart-dashboard', 'Restart Dashboard') }, ico('reload'), ' Dashboard'),
+    el('button', { class: 'btn', onclick: () => doAction('pull-images', 'Pull Images') }, ico('download'), ' Pull'),
+    el('button', { class: 'btn', onclick: () => doAction('compose-up', 'Compose Up') }, ico('power'), ' Up'),
+    el('button', { class: 'btn danger', onclick: () => { if (confirm('Bring stack down?')) doAction('compose-down', 'Compose Down'); } }, ico('power'), ' Down'),
+  ),
+  el('div', { class: 'panel-section' }, 'Model pull'),
+  el('div', { class: 'pull-box' }, (state.pull || []).join('\n') || 'no active pull'),
+  el('div', { class: 'panel-section' }, 'Quick links'),
+  el('a', { class: 'link-card', href: 'https://chat.agent.ojee.net', target: '_blank' },
+    el('div', { class: 'link-card-title' },
+      el('span', {}, 'Open WebUI'),
+      el('span', { class: 'link-card-sub' }, 'Full chat with RAG'),
+    ),
+    ico('arrow', 16),
+  ),
+  el('a', { class: 'link-card', href: 'https://flow.agent.ojee.net', target: '_blank' },
+    el('div', { class: 'link-card-title' },
+      el('span', {}, 'n8n'),
+      el('span', { class: 'link-card-sub' }, 'Workflow automation'),
+    ),
+    ico('arrow', 16),
+  ),
+);
+
+// ─── Chat actions ──────────────────────────────────────────────────────
 const newChat = () => {
-  state.chat = [];
-  state.activeChatId = null;
-  state.chatDirty = false;
-  state.chatStatus = null;
-  state.chatJobId = null;
-  state.chatStartTs = null;
-  persistChat();
-  render();
+  state.chat = []; state.activeChatId = null; state.chatDirty = false;
+  state.chatStatus = null; state.chatJobId = null; state.chatStartTs = null;
+  persistChat(); render();
 };
-
-const clearChat = () => {
-  if (state.chat.length && !confirm('Clear current chat?')) return;
-  newChat();
-};
-
+const clearChat = () => { if (state.chat.length && !confirm('Clear current chat?')) return; newChat(); };
 const saveChat = async () => {
   if (!state.chat.length) return;
   const id = state.activeChatId || randId();
@@ -376,165 +530,149 @@ const saveChat = async () => {
     method: 'PUT',
     body: JSON.stringify({ title, model: state.chatModel, messages: state.chat }),
   });
-  state.activeChatId = id;
-  state.chatDirty = false;
-  await loadSavedChats();
-  persistChat();
-  render();
+  state.activeChatId = id; state.chatDirty = false;
+  await loadSavedChats(); persistChat(); render();
 };
-
 const loadChat = async (id) => {
-  if (state.chatDirty && !state.activeChatId) {
-    if (!confirm('Discard unsaved chat?')) return;
-  }
-  const chat = await api(`/api/chats/${id}`);
-  if (!chat) return;
-  state.chat = chat.messages || [];
-  state.activeChatId = chat.id;
-  state.chatModel = chat.model || state.chatModel;
+  if (state.chatDirty && !state.activeChatId && !confirm('Discard unsaved chat?')) return;
+  const c = await api(`/api/chats/${id}`);
+  if (!c) return;
+  state.chat = c.messages || [];
+  state.activeChatId = c.id;
+  state.chatModel = c.model || state.chatModel;
   state.chatDirty = false;
   state.showSavedList = false;
-  persistChat();
-  render();
+  persistChat(); render();
 };
-
 const deleteChat = async (id, e) => {
-  if (e) e.stopPropagation();
+  e?.stopPropagation();
   if (!confirm('Delete this chat?')) return;
   await api(`/api/chats/${id}`, { method: 'DELETE' });
-  if (state.activeChatId === id) {
-    state.chat = [];
-    state.activeChatId = null;
-  }
-  await loadSavedChats();
-  persistChat();
-  render();
+  if (state.activeChatId === id) { state.chat = []; state.activeChatId = null; }
+  await loadSavedChats(); persistChat(); render();
 };
-
 const renameChat = async (id, e) => {
-  if (e) e.stopPropagation();
-  const chat = state.savedChats.find(c => c.id === id);
-  const newTitle = prompt('Rename chat:', chat?.title || '');
-  if (!newTitle || newTitle === chat?.title) return;
+  e?.stopPropagation();
+  const c = state.savedChats.find(x => x.id === id);
+  const t = prompt('Rename chat:', c?.title || '');
+  if (!t || t === c?.title) return;
   const full = await api(`/api/chats/${id}`);
-  if (full) {
-    full.title = newTitle;
-    await api(`/api/chats/${id}`, { method: 'PUT', body: JSON.stringify(full) });
-    await loadSavedChats();
-    render();
-  }
+  if (full) { full.title = t; await api(`/api/chats/${id}`, { method: 'PUT', body: JSON.stringify(full) }); await loadSavedChats(); render(); }
 };
-
 const loadSavedChats = async () => {
   const list = await api('/api/chats');
   state.savedChats = Array.isArray(list) ? list : [];
 };
 
-// ─── Chat panel ─────────────────────────────────────────────────────────
-const typingDots = () => el('span', { class: 'typing-dots' },
-  el('span', {}, '\u25CF'), el('span', {}, '\u25CF'), el('span', {}, '\u25CF')
+// ─── Chat message rendering ────────────────────────────────────────────
+const typingDots = () => el('span', { class: 'typing-dots' }, el('span'), el('span'), el('span'));
+const chip = (kind, label, iconName) => el('span', { class: `chat-chip chip-${kind}`, title: label },
+  ico(iconName, 12), el('span', {}, label));
+
+const renderChatMsg = (m, opts = {}) => {
+  const { isLast = false, busy = false, busyStatus = null, busyStart = null } = opts;
+  const streaming = isLast && m.role === 'assistant' && busy;
+
+  const body = el('div', { class: 'md-body' });
+  if (streaming && !m.content && !m.text) {
+    body.appendChild(typingDots());
+  } else if (m.role === 'assistant') {
+    const txt = m.content || m.text || '';
+    body.innerHTML = renderMarkdown(txt) || (streaming ? '' : '<em class="muted">(empty)</em>');
+    if (streaming) body.appendChild(el('span', { class: 'typing-cursor' }, '▍'));
+  } else {
+    body.textContent = m.content || m.text || '';
+  }
+
+  if (m.role === 'tool_use') {
+    const inputStr = typeof m.input === 'object' ? JSON.stringify(m.input).slice(0, 120) : String(m.input || '').slice(0, 120);
+    return el('div', { class: 'ca-tool' }, ico('tools', 12), el('span', {}, `${m.tool}(${inputStr})`));
+  }
+
+  if (m.role === 'user') {
+    return el('div', { class: 'chat-msg chat-user' },
+      el('div', { class: 'chat-label-row' },
+        el('div', { class: 'chat-label' }, 'You'),
+        m.ts ? el('span', { class: 'chat-time' }, fmtTime(m.ts)) : null,
+      ),
+      body,
+    );
+  }
+
+  // Assistant message
+  const model = m.model || (state.chatMode === 'chat' ? state.chatModel : null);
+  const tools = m.tools || [];
+  const filesChanged = m.files_changed || [];
+  const statusText = streaming
+    ? (busyStatus && busyStatus !== 'typing' && busyStatus !== 'reconnecting' ? busyStatus : ((m.content || m.text) ? 'typing' : 'thinking'))
+    : null;
+
+  const elapsed = streaming && busyStart ? Date.now() - busyStart : m.elapsed_ms;
+  const timeStr = m.ts && !streaming ? fmtTime(m.ts) : '';
+  const durStr = elapsed != null ? fmtDur(elapsed) : '';
+  const timeDisplay = (timeStr ? timeStr : '') + (durStr ? (timeStr ? ' · ' : '') + durStr : '');
+
+  const chipRow = el('div', { class: 'chat-chips' },
+    model ? chip('model', model, 'spark') : null,
+    ...tools.map(t => chip('tool', toolLabel(t), toolIcon(t))),
+    ...filesChanged.map(f => chip('tool', f, 'file')),
+    statusText ? chip('status', statusText + '…', 'spinner') : null,
+    timeDisplay
+      ? el('span', {
+          class: 'chat-time' + (streaming ? ' live-timer' : ''),
+          'data-start': streaming && busyStart ? String(busyStart) : '',
+          'data-prefix': streaming && timeStr ? timeStr : '',
+        }, timeDisplay)
+      : null,
+  );
+
+  return el('div', { class: 'chat-msg chat-assistant' }, chipRow, body);
+};
+
+// ─── Chat panel (unified Ollama + Code) ───────────────────────────────
+const setChatMode = (mode) => {
+  state.chatMode = mode;
+  localStorage.setItem('chat_mode', mode);
+  render();
+};
+
+const chatModesSwitch = () => el('div', { class: 'chat-modes' },
+  el('button', { class: 'chat-mode-btn' + (state.chatMode === 'chat' ? ' active' : ''), onclick: () => setChatMode('chat') },
+    'Chat'),
+  state.codeAgent.enabled ? el('button', { class: 'chat-mode-btn' + (state.chatMode === 'code' ? ' active' : ''), onclick: () => setChatMode('code') },
+    'Code') : null,
 );
 
-const SVG_PATHS = {
-  model:       '<path fill="currentColor" d="M9 3h6v2h2a2 2 0 0 1 2 2v2h2v2h-2v2h2v2h-2v2a2 2 0 0 1-2 2h-2v2H9v-2H7a2 2 0 0 1-2-2v-2H3v-2h2v-2H3v-2h2V7a2 2 0 0 1 2-2h2V3zm0 6v6h6V9H9z"/>',
-  web_search:  '<circle cx="10" cy="10" r="5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M14 14l5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>',
-  web_fetch:   '<path d="M12 3v10m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
-  get_stats:   '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
-  get_services:'<rect x="3" y="3" width="7" height="7" rx="1" fill="none" stroke="currentColor" stroke-width="2"/><rect x="14" y="3" width="7" height="7" rx="1" fill="none" stroke="currentColor" stroke-width="2"/><rect x="3" y="14" width="7" height="7" rx="1" fill="none" stroke="currentColor" stroke-width="2"/><rect x="14" y="14" width="7" height="7" rx="1" fill="none" stroke="currentColor" stroke-width="2"/>',
-  list_models: '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
-  read_file:   '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M14 2v6h6M8 13h8M8 17h8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
-  list_dir:    '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>',
-  n8n:         '<circle cx="5" cy="5" r="2.5" fill="currentColor"/><circle cx="12" cy="12" r="2.5" fill="currentColor"/><circle cx="19" cy="5" r="2.5" fill="currentColor"/><circle cx="19" cy="19" r="2.5" fill="currentColor"/><path d="M7 6l4 5M17 7l-4 4M14 13l4 5" stroke="currentColor" stroke-width="1.5" fill="none"/>',
-  status:      '<circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2" stroke-dasharray="12 6" stroke-linecap="round"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1.2s" repeatCount="indefinite"/></circle>'
-};
-const svgChip = (kind) => {
-  const resolved = kind && kind.startsWith('n8n_') ? 'n8n' : kind;
-  const key = SVG_PATHS[resolved] ? resolved : 'model';
-  const wrap = el('span', { class: 'chip-icon', html: `<svg viewBox="0 0 24 24" width="12" height="12">${SVG_PATHS[key]}</svg>` });
-  return wrap;
-};
-const TOOL_LABELS = {
-  web_search: 'Web search',
-  web_fetch: 'Web page',
-  get_stats: 'System stats',
-  get_services: 'Services',
-  list_models: 'Models',
-  read_file: 'File read',
-  list_dir: 'Directory',
-  n8n_list_workflows: 'List workflows',
-  n8n_get_workflow: 'Read workflow',
-  n8n_create_workflow: 'New workflow',
-  n8n_update_workflow: 'Update workflow',
-  n8n_activate_workflow: 'Activate workflow',
-  n8n_deactivate_workflow: 'Deactivate workflow',
-  n8n_quick_workflow: 'Build workflow'
-};
-const chipLabel = (kind, raw) => kind === 'tool' ? (TOOL_LABELS[raw] || raw.replace(/_/g, ' ')) : raw;
-const chip = (kind, raw, icon) => {
-  const label = chipLabel(kind, raw);
-  return el('span', { class: `chat-chip chip-${kind}`, title: raw },
-    icon, el('span', { class: 'chip-label' }, label)
-  );
-};
-
 const panelChat = () => {
+  if (state.chatMode === 'code' && state.codeAgent.enabled) return panelChatCode();
+  return panelChatOllama();
+};
+
+// ─── Ollama chat ───────────────────────────────────────────────────────
+const panelChatOllama = () => {
   const lastIdx = state.chat.length - 1;
+  const log = el('div', { class: 'chat-log' });
 
-  const logChildren = state.chat.length === 0
-    ? [el('div', { class: 'chat-empty' }, 'Ask anything\u2026')]
-    : state.chat.map((m, i) => {
-      const isLast = i === lastIdx;
-      const streaming = isLast && m.role === 'assistant' && state.chatBusy;
-      const bodyEl = el('div', { class: 'md-body' });
-      if (streaming && !m.content) {
-        bodyEl.appendChild(typingDots());
-      } else if (m.role === 'assistant') {
-        bodyEl.innerHTML = renderMarkdown(m.content);
-        if (streaming) {
-          const cursor = el('span', { class: 'typing-cursor' }, '\u258D');
-          bodyEl.appendChild(cursor);
-        }
-      } else {
-        bodyEl.textContent = m.content;
-      }
+  if (state.chat.length === 0) {
+    log.appendChild(el('div', { class: 'chat-empty' },
+      ico('message', 28),
+      el('div', {}, 'Ask anything'),
+      el('div', { class: 'chat-empty-tips' },
+        el('span', { class: 'tip' }, 'weather in Cairo'),
+        el('span', { class: 'tip' }, 'list workflows'),
+        el('span', { class: 'tip' }, 'restart n8n'),
+      ),
+    ));
+  } else {
+    state.chat.forEach((m, i) => log.appendChild(renderChatMsg(m, {
+      isLast: i === lastIdx, busy: state.chatBusy, busyStatus: state.chatStatus, busyStart: state.chatStartTs,
+    })));
+  }
 
-      if (m.role === 'user') {
-        return el('div', { class: 'chat-msg chat-user' },
-          el('div', { class: 'chat-label-row' },
-            el('div', { class: 'chat-label' }, 'user'),
-            m.ts ? el('span', { class: 'chat-time' }, fmtTime(m.ts)) : null
-          ),
-          bodyEl
-        );
-      }
-
-      const model = m.model || state.chatModel;
-      const toolList = m.tools || [];
-      const statusText = !streaming ? null
-        : (state.chatStatus && state.chatStatus.startsWith('searching') ? state.chatStatus
-        : (m.content ? 'typing' : 'thinking'));
-
-      // Live timer: show elapsed time always (counting up while streaming)
-      const elapsed = streaming && state.chatStartTs
-        ? Date.now() - state.chatStartTs
-        : m.elapsed_ms;
-      const timeStr = m.ts ? fmtTime(m.ts) : '';
-      const durStr = elapsed != null ? fmtDur(elapsed) : '';
-      const timeDisplay = timeStr + (durStr ? ' \u00B7 ' + durStr : '');
-
-      const chipRow = el('div', { class: 'chat-chips' },
-        model ? chip('model', model, svgChip('model')) : null,
-        ...toolList.map(t => chip('tool', t, svgChip(t))),
-        statusText ? chip('status', statusText + '\u2026', svgChip('status')) : null,
-        // Always show time/duration (live timer element for streaming)
-        timeDisplay ? el('span', { class: 'chat-time' + (streaming ? ' live-timer' : ''), 'data-start': streaming ? String(state.chatStartTs) : '', 'data-prefix': streaming && timeStr ? timeStr : '' }, timeDisplay) : null
-      );
-      return el('div', { class: 'chat-msg chat-assistant' }, chipRow, bodyEl);
-    });
-
-  const log = el('div', { class: 'chat-log' }, ...logChildren);
-
-  const input = el('textarea', { class: 'chat-input', rows: '1', placeholder: state.chatModel ? 'Ask anything\u2026' : 'Pull a model first' });
+  const input = el('textarea', {
+    class: 'chat-input', rows: '1',
+    placeholder: state.chatModel ? 'Message…' : 'Pull a model first',
+  });
   input.value = localStorage.getItem('draft_main') || '';
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
@@ -542,7 +680,7 @@ const panelChat = () => {
   input.addEventListener('input', () => {
     localStorage.setItem('draft_main', input.value);
     input.style.height = 'auto';
-    input.style.height = Math.min(input.scrollHeight, 160) + 'px';
+    input.style.height = Math.min(input.scrollHeight, 200) + 'px';
   });
 
   const send = async () => {
@@ -551,14 +689,10 @@ const panelChat = () => {
     const now = Date.now();
     state.chat.push({ role: 'user', content: text, ts: now });
     state.chat.push({ role: 'assistant', content: '', model: state.chatModel, tools: [], ts: null, elapsed_ms: null });
-    state.chatBusy = true;
-    state.chatStatus = 'thinking';
-    state.chatDirty = true;
-    state.chatStartTs = now;
-    input.value = '';
-    localStorage.removeItem('draft_main');
-    persistChat();
-    render();
+    state.chatBusy = true; state.chatStatus = 'thinking';
+    state.chatDirty = true; state.chatStartTs = now;
+    input.value = ''; localStorage.removeItem('draft_main');
+    persistChat(); render();
 
     try {
       const r = await fetch('/api/chat', {
@@ -566,7 +700,7 @@ const panelChat = () => {
         headers: { ...headers(), 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model: state.chatModel,
-          messages: state.chat.slice(0, -1).map(m => ({ role: m.role, content: m.content }))
+          messages: state.chat.slice(0, -1).map(m => ({ role: m.role, content: m.content })),
         }),
       });
       const reader = r.body.getReader();
@@ -580,104 +714,94 @@ const panelChat = () => {
         buf = lines.pop() || '';
         for (const line of lines) {
           if (!line.startsWith('data: ')) continue;
-          const payload = line.slice(6);
-          if (payload === '[DONE]') continue;
+          const p = line.slice(6);
+          if (p === '[DONE]') continue;
           try {
-            const j = JSON.parse(payload);
-            if (j.job_id) {
-              state.chatJobId = j.job_id;
-              persistChat();
-            } else if (j.message?.content) {
+            const j = JSON.parse(p);
+            if (j.job_id) { state.chatJobId = j.job_id; persistChat(); }
+            else if (j.message?.content) {
               if (state.chatStatus !== 'typing') state.chatStatus = 'typing';
               state.chat[state.chat.length - 1].content += j.message.content;
               render();
             } else if (j.tool_call) {
-              state.chatStatus = `searching \u00B7 ${j.tool_call.name.replace(/^(get|list|read|web)_/, '')}`;
+              state.chatStatus = `${j.tool_call.name.replace(/^(get|list|read|web)_/, '')}`;
               const last = state.chat[state.chat.length - 1];
               if (!last.tools) last.tools = [];
               if (!last.tools.includes(j.tool_call.name)) last.tools.push(j.tool_call.name);
               render();
             } else if (j.tool_result) {
-              state.chatStatus = 'thinking';
-              render();
+              state.chatStatus = 'thinking'; render();
             }
           } catch {}
         }
       }
-      // Auto-save if active chat exists
-      if (state.activeChatId) { saveChat().catch(() => {}); }
+      if (state.activeChatId) saveChat().catch(() => {});
     } catch (e) {
       if (e.name === 'AbortError') {
         const last = state.chat[state.chat.length - 1];
         if (!last.content) last.content = '*(stopped)*';
         else last.content += '\n\n*(stopped)*';
       } else if (state.chatJobId) {
-        // SSE stream dropped but server job is still running — reconnect
-        state.chatStatus = 'reconnecting';
-        persistChat();
-        render();
+        state.chatStatus = 'reconnecting'; persistChat(); render();
         reconnectChatJob(state.chatJobId);
         return;
       } else {
         state.chat[state.chat.length - 1].content = `Error: ${e.message}`;
       }
     }
-    // Set timestamp to NOW (completion time) and compute elapsed
     const last = state.chat[state.chat.length - 1];
     if (last && last.role === 'assistant') {
       last.ts = Date.now();
       last.elapsed_ms = state.chatStartTs ? Date.now() - state.chatStartTs : null;
     }
-    state.chatJobId = null;
-    state.chatBusy = false;
-    state.chatStatus = null;
-    state.chatStartTs = null;
-    persistChat();
-    render();
+    state.chatJobId = null; state.chatBusy = false;
+    state.chatStatus = null; state.chatStartTs = null;
+    persistChat(); render();
   };
 
   const stop = () => { state.chatAbort?.abort(); };
 
   const modelSel = el('select', { class: 'chat-select', onchange: (e) => { state.chatModel = e.target.value; persistChat(); render(); } },
     ...(state.models.length ? state.models : [{ name: 'no models' }]).map(m =>
-      el('option', { value: m.name, ...(m.name === state.chatModel ? { selected: true } : {}) }, m.name)
-    )
+      el('option', { value: m.name, ...(m.name === state.chatModel ? { selected: true } : {}) }, m.name),
+    ),
   );
 
   const toolbar = el('div', { class: 'chat-toolbar' },
-    el('button', { class: 'btn sm', onclick: newChat, title: 'New chat' }, '+ New'),
-    el('button', { class: 'btn sm', onclick: saveChat, title: 'Save this chat', disabled: state.chat.length === 0 }, 'Save'),
-    el('button', { class: 'btn sm', onclick: clearChat, title: 'Clear current chat', disabled: state.chat.length === 0 }, 'Clear'),
-    el('button', { class: 'btn sm', onclick: () => { state.showSavedList = !state.showSavedList; render(); }, title: 'Show saved chats' },
-      `Saved (${state.savedChats.length})`)
+    modelSel,
+    el('button', { class: 'btn sm', onclick: newChat, title: 'New chat' }, ico('plus', 14)),
+    el('button', { class: 'btn sm', onclick: saveChat, title: 'Save chat', disabled: state.chat.length === 0 }, 'Save'),
+    el('button', { class: 'btn sm', onclick: () => { state.showSavedList = !state.showSavedList; render(); }, title: 'Browse saved' }, `${state.showSavedList ? 'Hide' : 'Saved'} (${state.savedChats.length})`),
   );
 
   const savedList = state.showSavedList
     ? el('div', { class: 'saved-list' },
         state.savedChats.length === 0
-          ? el('div', { class: 'muted small' }, 'no saved chats yet')
+          ? el('div', { class: 'muted', style: 'padding:10px;text-align:center;font-size:0.78rem' }, 'no saved chats')
           : state.savedChats.map(c =>
               el('div', { class: 'saved-item' + (c.id === state.activeChatId ? ' active' : ''), onclick: () => loadChat(c.id) },
                 el('div', { class: 'saved-title' }, c.title),
                 el('div', { class: 'saved-actions' },
-                  el('button', { class: 'saved-rename', onclick: (e) => renameChat(c.id, e), title: 'Rename' }, '\u270E'),
-                  el('button', { class: 'saved-del', onclick: (e) => deleteChat(c.id, e), title: 'Delete' }, '\u00D7')
-                )
-              )
-            )
+                  el('button', { class: 'btn ghost icon', onclick: (e) => renameChat(c.id, e), title: 'Rename' }, ico('pencil', 12)),
+                  el('button', { class: 'btn ghost icon danger', onclick: (e) => deleteChat(c.id, e), title: 'Delete' }, ico('trash', 12)),
+                ),
+              ),
+            ),
       )
     : null;
 
-  const activeIndicator = state.activeChatId
-    ? el('div', { class: 'chat-active-badge' }, `editing: ${(state.savedChats.find(c => c.id === state.activeChatId) || {}).title || '\u2014'}`)
+  const activeBadge = state.activeChatId
+    ? el('div', { class: 'chat-active-badge' }, `editing: ${(state.savedChats.find(c => c.id === state.activeChatId) || {}).title || '—'}`)
     : null;
 
-  return el('div', { class: 'panel chat-panel' },
-    el('div', { class: 'panel-head' }, 'Chat'),
-    modelSel,
+  return el('div', { class: 'panel chat-panel', 'data-panel': 'chat' },
+    el('div', { class: 'panel-head' },
+      el('span', {}, 'Chat'),
+      chatModesSwitch(),
+    ),
     toolbar,
     savedList,
-    activeIndicator,
+    activeBadge,
     el('div', { class: 'chat-wrap' },
       log,
       el('div', { class: 'chat-form' },
@@ -685,14 +809,15 @@ const panelChat = () => {
         el('button', {
           class: 'btn primary chat-send' + (state.chatBusy ? ' chat-stop' : ''),
           onclick: state.chatBusy ? stop : send,
-          disabled: !state.chatModel
-        }, state.chatBusy ? 'Stop' : 'Send')
-      )
-    )
+          disabled: !state.chatModel,
+          title: state.chatBusy ? 'Stop' : 'Send',
+        }, state.chatBusy ? ico('stop', 14) : ico('send', 14)),
+      ),
+    ),
   );
 };
 
-// ─── Code Agent panel (Claude Code on the Loq laptop) ─────────────────
+// ─── Code Agent (Claude Code) ──────────────────────────────────────────
 const caLoadDir = async (p) => {
   const data = await api('/api/code-agent/dirs' + (p ? '?path=' + encodeURIComponent(p) : ''));
   if (data) {
@@ -702,17 +827,15 @@ const caLoadDir = async (p) => {
   }
   render();
 };
-
 const caRefreshSessions = async () => {
   const data = await api('/api/code-agent/sessions');
   if (data) state.codeAgent.sessions = data.active || [];
   render();
 };
-
 const caOpenHere = async () => {
   const cwd = state.codeAgent.pickerPath;
   const d = await api('/api/code-agent/sessions', { method: 'POST', body: JSON.stringify({ cwd }) });
-  if (d && d.id) {
+  if (d?.id) {
     state.codeAgent.active = d.id;
     state.codeAgent.messages = [];
     state.codeAgent.pickerOpen = false;
@@ -720,70 +843,55 @@ const caOpenHere = async () => {
     await caRefreshSessions();
   }
 };
-
 const caSelect = async (id) => {
   state.codeAgent.active = id;
   state.codeAgent.messages = [];
-  persistCode();
-  render();
+  persistCode(); render();
   const h = await api(`/api/code-agent/sessions/${id}/history`);
   if (h?.messages) state.codeAgent.messages = h.messages;
-  persistCode();
-  render();
+  persistCode(); render();
 };
-
 const caRename = async (id, e) => {
-  if (e) e.stopPropagation();
-  const s = state.codeAgent.sessions.find(s => s.id === id);
-  const newTitle = prompt('Rename session:', s?.title || '');
-  if (!newTitle || newTitle === s?.title) return;
-  const r = await api(`/api/code-agent/sessions/${id}`, { method: 'PATCH', body: JSON.stringify({ title: newTitle }) });
+  e?.stopPropagation();
+  const s = state.codeAgent.sessions.find(x => x.id === id);
+  const t = prompt('Rename session:', s?.title || '');
+  if (!t || t === s?.title) return;
+  const r = await api(`/api/code-agent/sessions/${id}`, { method: 'PATCH', body: JSON.stringify({ title: t }) });
   if (r && !r.error) await caRefreshSessions();
 };
-
 const caClose = async (id, e) => {
-  if (e) e.stopPropagation();
+  e?.stopPropagation();
   if (!confirm('Close this session? (Claude history is kept on disk.)')) return;
   await api(`/api/code-agent/sessions/${id}`, { method: 'DELETE' });
   if (state.codeAgent.active === id) {
-    state.codeAgent.active = null;
-    state.codeAgent.messages = [];
-    state.codeAgent.busy = false;
-    persistCode();
+    state.codeAgent.active = null; state.codeAgent.messages = [];
+    state.codeAgent.busy = false; persistCode();
   }
   await caRefreshSessions();
 };
 
-// Reconnect to a code-agent session that was still streaming when the tab closed.
-// If the child process is gone (404), just mark done and keep what's in messages.
 const caReconnect = async (id) => {
+  // Snapshot: if reconnect produces nothing, restore what we had.
+  const snapshot = state.codeAgent.messages.map(m => ({ ...m }));
   try {
     const r = await fetch(`/api/code-agent/sessions/${id}/stream`, { headers: headers() });
     if (!r.ok) {
-      state.codeAgent.busy = false;
-      state.codeAgent.status = null;
-      state.codeAgent.startTs = null;
+      state.codeAgent.busy = false; state.codeAgent.status = null; state.codeAgent.startTs = null;
       const last = state.codeAgent.messages[state.codeAgent.messages.length - 1];
       if (last && last.role === 'assistant') {
-        // Strip any "Error: ..." left from a previous dropped connection
         if (last.text) last.text = last.text.replace(/\n?\n?Error: .+$/, '').trim();
         if (!last.text) last.text = '*(session ended while disconnected)*';
       }
-      persistCode();
-      render();
-      return;
+      persistCode(); render(); return;
     }
-    // Server replays ALL buffered events — find the last user message index
-    // and remove everything after it so we don't duplicate assistant content.
-    const lastUserIdx = state.codeAgent.messages.reduce((acc, m, i) => m.role === 'user' ? i : acc, -1);
-    if (lastUserIdx >= 0) {
-      state.codeAgent.messages.splice(lastUserIdx + 1);
-    }
+    const lastUserIdx = state.codeAgent.messages.reduce((a, m, i) => m.role === 'user' ? i : a, -1);
+    if (lastUserIdx >= 0) state.codeAgent.messages.splice(lastUserIdx + 1);
     render();
     const reader = r.body.getReader();
     const dec = new TextDecoder();
     let buf = '';
-    const ensureLastAssistant = () => {
+    let gotAny = false;
+    const ensureLast = () => {
       const last = state.codeAgent.messages[state.codeAgent.messages.length - 1];
       if (!last || last.role !== 'assistant') {
         state.codeAgent.messages.push({ role: 'assistant', text: '', ts: Date.now(), elapsed_ms: null });
@@ -800,24 +908,23 @@ const caReconnect = async (id) => {
         const p = line.slice(6);
         if (p === '[DONE]') continue;
         try {
-          const evt = JSON.parse(p);
-          if (evt.type === 'text') {
-            ensureLastAssistant();
-            state.codeAgent.messages[state.codeAgent.messages.length - 1].text += evt.text;
-            state.codeAgent.status = 'typing';
-          } else if (evt.type === 'tool_use') {
-            state.codeAgent.messages.push({ role: 'tool_use', tool: evt.tool, input: evt.input, ts: Date.now() });
+          const e = JSON.parse(p);
+          gotAny = true;
+          if (e.type === 'text') { ensureLast(); state.codeAgent.messages[state.codeAgent.messages.length - 1].text += e.text; state.codeAgent.status = 'typing'; }
+          else if (e.type === 'tool_use') {
+            state.codeAgent.messages.push({ role: 'tool_use', tool: e.tool, input: e.input, ts: Date.now() });
             state.codeAgent.messages.push({ role: 'assistant', text: '', ts: Date.now(), elapsed_ms: null });
-            state.codeAgent.status = `running ${evt.tool}`;
-          } else if (evt.type === 'tool_result') {
-            state.codeAgent.status = 'thinking';
-          } else if (evt.type === 'result') {
-            state.codeAgent.status = evt.is_error ? 'error' : null;
+            state.codeAgent.status = `running ${e.tool}`;
           }
-          persistCode();
-          render();
+          else if (e.type === 'tool_result') state.codeAgent.status = 'thinking';
+          else if (e.type === 'result') state.codeAgent.status = e.is_error ? 'error' : null;
+          persistCode(); render();
         } catch {}
       }
+    }
+    // If we got NOTHING from the stream and our local state is empty/shorter, restore snapshot
+    if (!gotAny && snapshot.length > state.codeAgent.messages.length) {
+      state.codeAgent.messages = snapshot;
     }
   } catch {}
   while (state.codeAgent.messages.length && state.codeAgent.messages[state.codeAgent.messages.length - 1].role === 'assistant' && !state.codeAgent.messages[state.codeAgent.messages.length - 1].text) {
@@ -827,24 +934,17 @@ const caReconnect = async (id) => {
     const m = state.codeAgent.messages[i];
     if (m.role === 'assistant' && m.ts && m.elapsed_ms == null) { m.elapsed_ms = Date.now() - m.ts; break; }
   }
-  state.codeAgent.busy = false;
-  state.codeAgent.status = null;
-  state.codeAgent.startTs = null;
-  persistCode();
-  render();
+  state.codeAgent.busy = false; state.codeAgent.status = null; state.codeAgent.startTs = null;
+  persistCode(); render();
 };
 
 const caSend = async (text) => {
   if (!state.codeAgent.active || !text.trim()) return;
-  // Allow sending even while busy (message will queue on the server)
   const now = Date.now();
   state.codeAgent.messages.push({ role: 'user', text, ts: now });
   state.codeAgent.messages.push({ role: 'assistant', text: '', ts: now, elapsed_ms: null });
-  state.codeAgent.busy = true;
-  state.codeAgent.status = 'thinking';
-  state.codeAgent.startTs = now;
-  persistCode();
-  render();
+  state.codeAgent.busy = true; state.codeAgent.status = 'thinking'; state.codeAgent.startTs = now;
+  persistCode(); render();
   try {
     const r = await fetch(`/api/code-agent/sessions/${state.codeAgent.active}/messages`, {
       method: 'POST',
@@ -865,25 +965,24 @@ const caSend = async (text) => {
         const p = line.slice(6);
         if (p === '[DONE]') continue;
         try {
-          const evt = JSON.parse(p);
+          const e = JSON.parse(p);
           const last = state.codeAgent.messages[state.codeAgent.messages.length - 1];
-          if (evt.type === 'text') { last.text += evt.text; state.codeAgent.status = 'typing'; persistCode(); render(); }
-          else if (evt.type === 'tool_use') { state.codeAgent.messages.push({ role: 'tool_use', tool: evt.tool, input: evt.input, ts: Date.now() }); state.codeAgent.messages.push({ role: 'assistant', text: '', ts: Date.now(), elapsed_ms: null }); state.codeAgent.status = `running ${evt.tool}`; persistCode(); render(); }
-          else if (evt.type === 'tool_result') { state.codeAgent.status = 'thinking'; render(); }
-          else if (evt.type === 'result') { state.codeAgent.status = evt.is_error ? 'error' : null; }
+          if (e.type === 'text') { last.text += e.text; state.codeAgent.status = 'typing'; persistCode(); render(); }
+          else if (e.type === 'tool_use') {
+            state.codeAgent.messages.push({ role: 'tool_use', tool: e.tool, input: e.input, ts: Date.now() });
+            state.codeAgent.messages.push({ role: 'assistant', text: '', ts: Date.now(), elapsed_ms: null });
+            state.codeAgent.status = `running ${e.tool}`; persistCode(); render();
+          }
+          else if (e.type === 'tool_result') { state.codeAgent.status = 'thinking'; render(); }
+          else if (e.type === 'result') { state.codeAgent.status = e.is_error ? 'error' : null; }
         } catch {}
       }
     }
   } catch (e) {
-    if (e.name === 'AbortError') {
-      // user clicked stop — leave as-is
-    } else if (state.codeAgent.active) {
-      // Stream dropped but session still exists — reconnect on next boot/visibility
-      state.codeAgent.status = 'reconnecting';
-      persistCode();
-      render();
-      caReconnect(state.codeAgent.active);
-      return;
+    if (e.name === 'AbortError') {}
+    else if (state.codeAgent.active) {
+      state.codeAgent.status = 'reconnecting'; persistCode(); render();
+      caReconnect(state.codeAgent.active); return;
     } else {
       const last = state.codeAgent.messages[state.codeAgent.messages.length - 1];
       if (last) last.text = (last.text || '') + `\n\nError: ${e.message}`;
@@ -896,15 +995,11 @@ const caSend = async (text) => {
     const m = state.codeAgent.messages[i];
     if (m.role === 'assistant' && m.ts && m.elapsed_ms == null) { m.elapsed_ms = Date.now() - m.ts; break; }
   }
-  state.codeAgent.busy = false;
-  state.codeAgent.status = null;
-  state.codeAgent.abort = null;
-  state.codeAgent.startTs = null;
-  persistCode();
-  render();
+  state.codeAgent.busy = false; state.codeAgent.status = null; state.codeAgent.startTs = null;
+  persistCode(); render();
 };
 
-// ─── Claude Code history browser ─────────────────────────────────────
+// History browser
 const caLoadHistory = async () => {
   state.codeAgent.historyOpen = true;
   state.codeAgent.historyView = null;
@@ -914,7 +1009,6 @@ const caLoadHistory = async () => {
   state.codeAgent.historyList = data?.conversations || [];
   render();
 };
-
 const caViewHistory = async (conv) => {
   state.codeAgent.historyView = conv;
   state.codeAgent.historyMessages = [];
@@ -925,17 +1019,15 @@ const caViewHistory = async (conv) => {
   state.codeAgent.historyCwd = data?.cwd || null;
   render();
 };
-
 const caContinue = async () => {
   const conv = state.codeAgent.historyView;
   const cwd = state.codeAgent.historyCwd;
-  if (!conv || !cwd) { alert('Could not determine the original directory for this conversation.'); return; }
+  if (!conv || !cwd) { toast('Original directory not found', 'warn'); return; }
   const r = await api('/api/code-agent/sessions/resume', {
     method: 'POST',
-    body: JSON.stringify({ id: conv.id, cwd, title: conv.title.slice(0, 60) })
+    body: JSON.stringify({ id: conv.id, cwd, title: conv.title.slice(0, 60) }),
   });
-  if (!r || r.error) { alert('Resume failed: ' + (r?.error || 'unknown')); return; }
-  // Switch to the session chat with the past messages pre-loaded
+  if (!r || r.error) { toast('Resume failed: ' + (r?.error || 'unknown'), 'danger'); return; }
   state.codeAgent.active = r.id;
   state.codeAgent.messages = state.codeAgent.historyMessages.slice();
   state.codeAgent.historyOpen = false;
@@ -944,14 +1036,13 @@ const caContinue = async () => {
   persistCode();
   await caRefreshSessions();
 };
-
 const caDeleteHistory = async (conv, e) => {
-  if (e) e.stopPropagation();
-  if (!confirm(`Delete "${conv.title.slice(0, 60)}${conv.title.length > 60 ? '…' : ''}"?\n\nThis removes the conversation file from disk.`)) return;
+  e?.stopPropagation();
+  if (!confirm(`Delete "${conv.title.slice(0, 60)}${conv.title.length > 60 ? '…' : ''}"?`)) return;
   const r = await api(`/api/code-agent/history/${encodeURIComponent(conv.project)}/${encodeURIComponent(conv.id)}`, { method: 'DELETE' });
   if (r?.ok) {
     state.codeAgent.historyList = state.codeAgent.historyList.filter(c => !(c.project === conv.project && c.id === conv.id));
-    if (state.codeAgent.historyView && state.codeAgent.historyView.id === conv.id) {
+    if (state.codeAgent.historyView?.id === conv.id) {
       state.codeAgent.historyView = null;
       state.codeAgent.historyMessages = [];
     }
@@ -959,39 +1050,34 @@ const caDeleteHistory = async (conv, e) => {
   }
 };
 
-const panelCodeAgent = () => {
+// Code chat panel (mode = "code")
+const panelChatCode = () => {
   const ca = state.codeAgent;
   const activeSession = ca.sessions.find(s => s.id === ca.active);
 
-  // Directory picker modal
+  // Directory picker
   if (ca.pickerOpen) {
     const rows = [];
     if (ca.pickerParent && ca.pickerParent !== ca.pickerPath) {
-      rows.push(el('div', { class: 'ca-dir-row', onclick: () => caLoadDir(ca.pickerParent) },
-        svgChip('list_dir'), el('span', {}, '..')));
+      rows.push(el('div', { class: 'ca-dir-row', onclick: () => caLoadDir(ca.pickerParent) }, ico('folder', 14), el('span', {}, '..')));
     }
     for (const e of ca.pickerEntries.filter(x => x.type === 'dir')) {
-      rows.push(el('div', { class: 'ca-dir-row', onclick: () => caLoadDir(e.path) },
-        svgChip('list_dir'), el('span', {}, e.name)));
+      rows.push(el('div', { class: 'ca-dir-row', onclick: () => caLoadDir(e.path) }, ico('folder', 14), el('span', {}, e.name)));
     }
-    return el('div', { class: 'panel ca-picker' },
-      el('div', { class: 'panel-head' }, 'Open Claude Code In...'),
+    return el('div', { class: 'panel chat-panel', 'data-panel': 'chat' },
+      el('div', { class: 'panel-head' }, el('span', {}, 'Open Code In…'), chatModesSwitch()),
       el('div', { class: 'ca-path' }, ca.pickerPath),
       el('div', { class: 'ca-dir-list' }, ...rows),
       el('div', { class: 'btn-row' },
         el('button', { class: 'btn sm', onclick: () => { ca.pickerOpen = false; render(); } }, 'Cancel'),
-        el('button', { class: 'btn sm primary', onclick: caOpenHere }, 'Open here')
-      )
+        el('button', { class: 'btn sm primary', onclick: caOpenHere }, 'Open here'),
+      ),
     );
   }
 
   // History browser
   if (ca.historyOpen) {
     if (ca.historyView) {
-      // Viewing a specific past conversation.
-      // Merge consecutive same-role text messages into one block so a single
-      // "claude turn" that was broken across many tool calls renders as one
-      // coherent response, not a stack of tiny fragments.
       const grouped = [];
       let toolCount = 0;
       for (const m of ca.historyMessages) {
@@ -999,222 +1085,136 @@ const panelCodeAgent = () => {
         const last = grouped[grouped.length - 1];
         if (last && last.role === m.role && (last.role === 'user' || last.role === 'assistant')) {
           last.text = (last.text || '') + '\n\n' + (m.text || '');
-        } else {
-          grouped.push({ ...m });
-        }
+        } else grouped.push({ ...m });
       }
-      const msgs = grouped.map(m => {
-        if (m.role === 'tool_use') {
-          const input = typeof m.input === 'object' ? JSON.stringify(m.input).slice(0, 120) : String(m.input || '').slice(0, 120);
-          return el('div', { class: 'ca-tool' }, svgChip('list_models'), el('span', {}, `${m.tool}(${input})`));
-        }
-        const body = document.createElement('div');
-        body.className = 'md-body';
-        const text = typeof m.text === 'string' ? m.text : '';
-        if (m.role === 'assistant') body.innerHTML = renderMarkdown(text) || '<em class="muted">(empty)</em>';
-        else body.textContent = text;
-        const box = el('div', { class: m.role === 'user' ? 'chat-msg chat-user' : 'chat-msg chat-assistant' },
-          el('div', { class: 'chat-label-row' },
-            el('div', { class: 'chat-label' }, m.role === 'user' ? 'user' : 'claude')
-          )
-        );
-        box.appendChild(body);
-        return box;
-      });
-      return el('div', { class: 'panel' },
-        el('div', { class: 'panel-head' }, 'History'),
+      const msgs = grouped.map(m => renderChatMsg(m));
+      return el('div', { class: 'panel chat-panel', 'data-panel': 'chat' },
+        el('div', { class: 'panel-head' }, el('span', {}, 'History'), chatModesSwitch()),
         el('div', { class: 'btn-row' },
-          el('button', { class: 'btn sm', onclick: () => { ca.historyView = null; ca.historyMessages = []; ca.historyCwd = null; render(); } }, '\u2190 Back'),
-          toolCount > 0
-            ? el('button', { class: 'btn sm', onclick: () => { ca.historyShowTools = !ca.historyShowTools; render(); }, title: 'Toggle tool call rows' },
-                ca.historyShowTools ? `Hide tools (${toolCount})` : `Show tools (${toolCount})`)
-            : null,
-          ca.historyCwd
-            ? el('button', { class: 'btn sm primary', onclick: caContinue, title: 'Resume this conversation and send new messages' }, 'Continue \u2192')
-            : null
+          el('button', { class: 'btn sm', onclick: () => { ca.historyView = null; ca.historyMessages = []; ca.historyCwd = null; render(); } }, '← Back'),
+          toolCount > 0 ? el('button', { class: 'btn sm', onclick: () => { ca.historyShowTools = !ca.historyShowTools; render(); } },
+            ca.historyShowTools ? `Hide tools (${toolCount})` : `Show tools (${toolCount})`) : null,
+          ca.historyCwd ? el('button', { class: 'btn sm primary', onclick: caContinue }, 'Continue →') : null,
         ),
         el('div', { class: 'ca-hist-title' }, ca.historyView.title),
-        el('div', { class: 'ca-hist-meta' }, `Project: ${ca.historyView.project} \u00B7 ${ca.historyView.messageCount} events` + (ca.historyCwd ? ` \u00B7 ${ca.historyCwd}` : '')),
-        el('div', { class: 'chat-wrap' },
-          el('div', { class: 'chat-log' }, ...msgs)
-        )
+        el('div', { class: 'ca-hist-meta' }, `${ca.historyView.project} · ${ca.historyView.messageCount} events${ca.historyCwd ? ' · ' + ca.historyCwd : ''}`),
+        el('div', { class: 'chat-wrap' }, el('div', { class: 'chat-log' }, ...msgs)),
       );
     }
-    // History list
-    return el('div', { class: 'panel' },
-      el('div', { class: 'panel-head' }, 'Past Conversations'),
-      el('button', { class: 'btn sm', onclick: () => { ca.historyOpen = false; render(); } }, '\u2190 Back'),
+    return el('div', { class: 'panel chat-panel', 'data-panel': 'chat' },
+      el('div', { class: 'panel-head' }, el('span', {}, 'History'), chatModesSwitch()),
+      el('button', { class: 'btn sm', onclick: () => { ca.historyOpen = false; render(); } }, '← Back'),
       ca.historyList.length === 0
-        ? el('div', { class: 'muted small' }, 'no past conversations found')
+        ? el('div', { class: 'muted', style: 'padding:20px;text-align:center;font-size:0.78rem' }, 'no past conversations')
         : el('div', { class: 'ca-hist-list' },
             ...ca.historyList.map(conv =>
               el('div', { class: 'saved-item', onclick: () => caViewHistory(conv) },
-                el('button', { class: 'saved-del', onclick: (e) => caDeleteHistory(conv, e), title: 'Delete' }, '\u00D7'),
                 el('div', { class: 'saved-title' }, conv.title),
-                el('div', { class: 'ca-hist-date' }, fmtTime(conv.modified))
-              )
-            )
-          )
+                el('div', { class: 'ca-hist-date' }, fmtTime(conv.modified)),
+                el('button', { class: 'btn ghost icon danger', onclick: (e) => caDeleteHistory(conv, e), title: 'Delete' }, ico('trash', 12)),
+              ),
+            ),
+          ),
     );
   }
 
-  // Session chat view — collect tool_use info per assistant turn for chips
-  const msgs = [];
-  // Group: for each assistant message, gather the tool_use entries that precede it
-  let pendingTools = [];
-  for (let i = 0; i < ca.messages.length; i++) {
-    const m = ca.messages[i];
-    if (m.role === 'tool_use') {
-      pendingTools.push(m);
-      // Render the tool_use row itself
-      const tinput = typeof m.input === 'object' ? JSON.stringify(m.input).slice(0, 120) : String(m.input || '').slice(0, 120);
-      msgs.push(el('div', { class: 'ca-tool' }, svgChip('list_models'), el('span', {}, `${m.tool}(${tinput})`)));
-      continue;
-    }
-    if (m.role === 'user') {
-      pendingTools = [];
-      const userTime = m.ts ? el('span', { class: 'chat-time' }, fmtTime(m.ts)) : null;
-      const bodyEl = el('div', { class: 'md-body' });
-      bodyEl.textContent = m.text;
-      msgs.push(el('div', { class: 'chat-msg chat-user' },
-        el('div', { class: 'chat-label-row' }, el('div', { class: 'chat-label' }, 'user'), userTime),
-        bodyEl
-      ));
-      continue;
-    }
-    // assistant message
-    const isLast = i === ca.messages.length - 1;
-    const streaming = isLast && ca.busy;
-    const statusText = streaming
-      ? (ca.status && ca.status !== 'typing' && ca.status !== 'reconnecting' ? ca.status : (m.text ? 'typing' : 'thinking'))
-      : null;
-
-    // Collect tools used + file changes from preceding tool_use entries
-    const toolsUsed = [];
-    const filesChanged = [];
-    for (const tu of pendingTools) {
-      if (tu.tool && !toolsUsed.includes(tu.tool)) toolsUsed.push(tu.tool);
-      if ((tu.tool === 'Edit' || tu.tool === 'Write') && tu.input) {
-        const fp = tu.input.file_path || tu.input.path || '';
-        const short = fp.split('/').pop();
-        if (short && !filesChanged.includes(short)) filesChanged.push(short);
-      }
-    }
-    pendingTools = [];
-
-    // Time display — live timer when streaming, static when done
-    const elapsed = streaming && ca.startTs ? Date.now() - ca.startTs : m.elapsed_ms;
-    const timeStr = m.ts && !streaming ? fmtTime(m.ts) : '';
-    const durStr = elapsed != null ? fmtDur(elapsed) : '';
-    const timeDisplay = timeStr + (durStr ? ' \u00B7 ' + durStr : '');
-    const timeEl = timeDisplay || streaming
-      ? el('span', {
-          class: 'chat-time' + (streaming ? ' live-timer' : ''),
-          'data-start': streaming && ca.startTs ? String(ca.startTs) : '',
-          'data-prefix': streaming && timeStr ? timeStr : ''
-        }, timeDisplay || fmtDur(0))
-      : null;
-
-    const chipRow = el('div', { class: 'chat-chips' },
-      ...toolsUsed.map(t => chip('tool', t, svgChip(t))),
-      ...filesChanged.map(f => chip('tool', f, svgChip('read_file'))),
-      statusText ? chip('status', statusText + '\u2026', svgChip('status')) : null,
-      timeEl
-    );
-
-    const bodyEl = el('div', { class: 'md-body' });
-    if (streaming && !m.text) {
-      bodyEl.appendChild(typingDots());
-    } else {
-      bodyEl.innerHTML = renderMarkdown(m.text);
-      if (streaming) bodyEl.appendChild(el('span', { class: 'typing-cursor' }, '\u258D'));
-    }
-    msgs.push(el('div', { class: 'chat-msg chat-assistant' }, chipRow, bodyEl));
+  // Build session message log
+  const log = el('div', { class: 'chat-log' });
+  if (!activeSession) {
+    log.appendChild(el('div', { class: 'chat-empty' },
+      ico('code', 28),
+      el('div', {}, ca.sessions.length ? 'Pick a session above' : 'Open a folder to start'),
+    ));
+  } else {
+    const lastIdx = ca.messages.length - 1;
+    ca.messages.forEach((m, i) => log.appendChild(renderChatMsg(m, {
+      isLast: i === lastIdx, busy: ca.busy, busyStatus: ca.status, busyStart: ca.startTs,
+    })));
   }
 
-  const input = el('textarea', { class: 'chat-input', rows: '1', placeholder: activeSession ? 'message Claude\u2026' : 'pick a session' });
+  const input = el('textarea', { class: 'chat-input', rows: '1',
+    placeholder: activeSession ? 'Message Claude…' : 'Pick a session' });
   input.value = localStorage.getItem('draft_code') || '';
+  const sendCode = () => {
+    const v = input.value.trim();
+    if (!v) return;
+    input.value = ''; localStorage.removeItem('draft_code');
+    caSend(v);
+  };
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      const v = input.value.trim();
-      if (v) { input.value = ''; localStorage.removeItem('draft_code'); caSend(v); }
-    }
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendCode(); }
   });
   input.addEventListener('input', () => {
     localStorage.setItem('draft_code', input.value);
     input.style.height = 'auto';
-    input.style.height = Math.min(input.scrollHeight, 160) + 'px';
+    input.style.height = Math.min(input.scrollHeight, 200) + 'px';
   });
 
-  const sessionTabs = ca.sessions.map(s =>
-    el('div', { class: 'ca-sess' + (s.id === ca.active ? ' active' : ''), onclick: () => caSelect(s.id) },
-      el('span', { class: 'ca-sess-title' }, s.title),
-      el('span', { class: 'ca-sess-cwd' }, s.cwd.replace(/^\/media\/ojee\/NVME\/Code\/\[GIT\]\//, '')),
-      el('div', { class: 'saved-actions' },
-        el('button', { class: 'saved-rename', onclick: (e) => caRename(s.id, e), title: 'Rename' }, '\u270E'),
-        el('button', { class: 'ca-sess-del', onclick: (e) => caClose(s.id, e), title: 'Close' }, '\u00D7')
+  const sessionTabs = ca.sessions.length
+    ? el('div', { class: 'ca-sess-list' },
+        ...ca.sessions.map(s =>
+          el('div', { class: 'ca-sess' + (s.id === ca.active ? ' active' : ''), onclick: () => caSelect(s.id) },
+            el('span', { class: 'ca-sess-title' }, s.title),
+            el('span', { class: 'ca-sess-cwd' }, s.cwd.replace(/^\/media\/ojee\/NVME\/Code\/\[GIT\]\//, '')),
+            el('div', { class: 'saved-actions' },
+              el('button', { class: 'btn ghost icon', onclick: (e) => caRename(s.id, e), title: 'Rename' }, ico('pencil', 12)),
+              el('button', { class: 'btn ghost icon danger', onclick: (e) => caClose(s.id, e), title: 'Close' }, ico('trash', 12)),
+            ),
+          ),
+        ),
       )
-    )
+    : el('div', { class: 'muted', style: 'padding:8px;font-size:0.78rem' }, 'no active sessions');
+
+  const headerSection = el('div', { class: 'panel-head' },
+    el('span', {}, 'Claude Code'),
+    chatModesSwitch(),
   );
 
-  return el('div', { class: 'panel' },
-    el('div', { class: 'panel-head' }, 'Claude Code'),
-    el('div', { class: 'btn-row' },
-      el('button', { class: 'btn sm primary', onclick: () => { ca.pickerOpen = true; render(); caLoadDir(ca.pickerPath); } }, '+ New session'),
-      el('button', { class: 'btn sm', onclick: caRefreshSessions }, 'Refresh'),
-      el('button', { class: 'btn sm', onclick: caLoadHistory }, 'History')
-    ),
-    ca.sessions.length ? el('div', { class: 'ca-sess-list' }, ...sessionTabs) : el('div', { class: 'muted small' }, 'no active sessions'),
+  const toolbar = el('div', { class: 'btn-row' },
+    el('button', { class: 'btn sm primary', onclick: () => { ca.pickerOpen = true; render(); caLoadDir(ca.pickerPath); } }, ico('plus', 14), ' New'),
+    el('button', { class: 'btn sm', onclick: caRefreshSessions }, ico('reload', 14)),
+    el('button', { class: 'btn sm', onclick: caLoadHistory }, ico('history', 14), ' History'),
+  );
+
+  return el('div', { class: 'panel chat-panel', 'data-panel': 'chat' },
+    headerSection,
+    toolbar,
+    sessionTabs,
     activeSession ? el('div', { class: 'chat-wrap' },
       el('div', { class: 'ca-active-head' },
         el('span', { class: 'ca-active-title' }, activeSession.title),
         el('span', { class: 'ca-active-cwd' }, activeSession.cwd),
-        ca.status ? el('span', { class: 'chat-chip chip-status' }, svgChip('status'), el('span', { class: 'chip-label' }, ca.status)) : null
       ),
-      el('div', { class: 'chat-log' }, ...msgs),
+      log,
       el('div', { class: 'chat-form' },
         input,
-        ca.busy ? el('button', {
-          class: 'btn chat-send chat-stop',
-          onclick: () => ca.abort?.abort()
-        }, 'Stop') : null,
-        el('button', {
-          class: 'btn primary chat-send',
-          onclick: () => {
-            const v = input.value.trim();
-            if (v) { input.value = ''; localStorage.removeItem('draft_code'); caSend(v); }
-          }
-        }, 'Send')
-      )
-    ) : null
+        ca.busy ? el('button', { class: 'btn chat-send chat-stop', title: 'Stop' }, ico('stop', 14)) : null,
+        el('button', { class: 'btn primary chat-send', onclick: sendCode, title: 'Send' }, ico('send', 14)),
+      ),
+    ) : null,
   );
 };
 
-// ─── Live timer interval ─────────────────────────────────────────────────
+// ─── Live timer ────────────────────────────────────────────────────────
 let liveTimerInterval = null;
-
 const startLiveTimer = () => {
   if (liveTimerInterval) clearInterval(liveTimerInterval);
   liveTimerInterval = setInterval(() => {
-    // Update all live-timer elements (main chat + code agent)
     const timers = document.querySelectorAll('.live-timer');
     if (!timers.length) { clearInterval(liveTimerInterval); liveTimerInterval = null; return; }
-    for (const timerEl of timers) {
-      const startTs = parseInt(timerEl.dataset.start, 10);
-      if (!startTs) continue;
-      const elapsed = Date.now() - startTs;
-      const prefix = timerEl.dataset.prefix || '';
-      timerEl.textContent = (prefix ? prefix + ' \u00B7 ' : '') + fmtDur(elapsed);
+    for (const t of timers) {
+      const start = parseInt(t.dataset.start, 10);
+      if (!start) continue;
+      const elapsed = Date.now() - start;
+      const prefix = t.dataset.prefix || '';
+      t.textContent = (prefix ? prefix + ' · ' : '') + fmtDur(elapsed);
     }
   }, 1000);
 };
 
-// ─── Render (preserves scroll positions + chat input) ────────────────────
+// ─── Render ────────────────────────────────────────────────────────────
 const render = () => {
-  // Preserve any .chat-input's value across renders, even when it isn't the
-  // focused element (e.g. user clicked Stop — focus moves to the button, but
-  // their drafted next message should survive the re-render).
+  // Preserve input value/focus across re-renders
   const oldInput = document.querySelector('.chat-input');
   const active = document.activeElement;
   const preserved = oldInput ? {
@@ -1224,34 +1224,42 @@ const render = () => {
     focused: oldInput === active,
   } : null;
 
-  // If a <select> dropdown is currently open (focused), defer the re-render
-  if (document.activeElement && document.activeElement.tagName === 'SELECT') return;
+  if (document.activeElement?.tagName === 'SELECT') return;
 
-  // Save scroll positions for all scrollable containers we care about. Any
-  // class listed here will have its scrollTop/scrollLeft restored after the
-  // DOM rebuild, matched by document order (so the 1st .ca-hist-list maps to
-  // the 1st .ca-hist-list after render, etc).
-  const SCROLL_SELECTORS = ['.panel', '.chat-log', '.ca-hist-list', '.ca-dir-list', '.ca-sess-list', '.code-page'];
-  const savedScrolls = {};
-  for (const sel of SCROLL_SELECTORS) {
-    savedScrolls[sel] = Array.from(document.querySelectorAll(sel)).map(p => ({ top: p.scrollTop, left: p.scrollLeft }));
-  }
-  // Special-case the first chat-log so we can optionally sticky-to-bottom on
-  // new streaming content.
+  // Save scroll positions
+  const SCROLL = ['.panel', '.chat-log', '.ca-hist-list', '.ca-dir-list', '.ca-sess-list', '.saved-list'];
+  const saved = {};
+  for (const sel of SCROLL) saved[sel] = Array.from(document.querySelectorAll(sel)).map(p => ({ top: p.scrollTop, left: p.scrollLeft }));
+
   const oldLog = document.querySelector('.chat-log');
   const stickToBottom = oldLog ? (oldLog.scrollHeight - oldLog.scrollTop - oldLog.clientHeight < 60) : true;
-  const pageScrollY = window.scrollY || document.documentElement.scrollTop || 0;
+  const pageY = window.scrollY || document.documentElement.scrollTop || 0;
+
+  // Preserve toast stack across rebuilds
+  const toastStack = document.querySelector('.toast-stack');
+  if (toastStack) toastStack.remove();
 
   document.body.innerHTML = '';
-  const content = state.view === 'code'
-    ? el('div', { class: 'code-page' }, panelCodeAgent())
-    : el('div', { class: 'grid' }, panelSystem(), panelServices(), panelActions(), panelChat());
-  document.body.append(
-    el('div', { class: 'dash' },
-      renderHeader(state.stats),
-      content
-    )
+  const grid = el('div', { class: 'grid' },
+    panelSystem(),
+    panelServices(),
+    panelActions(),
+    panelChat(),
   );
+  // On mobile, mark the active panel
+  const activePanel = state.view === 'chat' ? 'chat'
+    : state.view === 'services' ? 'services'
+    : state.view === 'actions' ? 'actions'
+    : 'dashboard';
+  for (const p of grid.children) {
+    if (p.dataset.panel === activePanel) p.classList.add('mobile-active');
+  }
+
+  document.body.append(
+    el('div', { class: 'dash' }, renderHeader(), grid),
+    renderBottomTabs(),
+  );
+  if (toastStack) document.body.appendChild(toastStack);
 
   if (preserved) {
     const newInput = document.querySelector('.chat-input');
@@ -1262,58 +1270,46 @@ const render = () => {
         try { newInput.setSelectionRange(preserved.start, preserved.end); } catch {}
       }
       newInput.style.height = 'auto';
-      newInput.style.height = Math.min(newInput.scrollHeight, 160) + 'px';
+      newInput.style.height = Math.min(newInput.scrollHeight, 200) + 'px';
     }
   }
 
-  // Restore every tracked scrollable. chat-log is handled specially to keep
-  // the sticky-to-bottom behaviour while streaming.
-  for (const sel of SCROLL_SELECTORS) {
-    const saved = savedScrolls[sel] || [];
-    Array.from(document.querySelectorAll(sel)).forEach((el, i) => {
-      const s = saved[i];
-      if (!s) return;
-      if (sel === '.chat-log' && i === 0 && stickToBottom) {
-        el.scrollTop = el.scrollHeight;
-      } else {
-        el.scrollTop = s.top;
-        el.scrollLeft = s.left;
-      }
+  for (const sel of SCROLL) {
+    const arr = saved[sel] || [];
+    Array.from(document.querySelectorAll(sel)).forEach((e, i) => {
+      const s = arr[i]; if (!s) return;
+      if (sel === '.chat-log' && i === 0 && stickToBottom) e.scrollTop = e.scrollHeight;
+      else { e.scrollTop = s.top; e.scrollLeft = s.left; }
     });
   }
+  if (pageY) window.scrollTo(0, pageY);
 
-  // Restore page scroll (mobile)
-  if (pageScrollY) window.scrollTo(0, pageScrollY);
-
-  // Start live timer if streaming (either chat type)
   if ((state.chatBusy && state.chatStartTs) || (state.codeAgent.busy && state.codeAgent.startTs)) startLiveTimer();
 };
 
-// ─── Reconnect to background chat job ────────────────────────────────────
+// ─── Reconnect chat job ────────────────────────────────────────────────
 const reconnectChatJob = async (jobId) => {
+  // Snapshot the current message so if reconnect returns nothing, we restore it
+  const lastIdx = state.chat.length - 1;
+  const lastMsg = state.chat[lastIdx];
+  const snapshot = lastMsg && lastMsg.role === 'assistant'
+    ? { content: lastMsg.content || '', tools: (lastMsg.tools || []).slice() }
+    : null;
+
   try {
-    const r = await fetch(`/api/chat/jobs/${jobId}`, {
-      headers: { ...headers() },
-    });
+    const r = await fetch(`/api/chat/jobs/${jobId}`, { headers: headers() });
     if (!r.ok) {
-      // Job gone — mark as finished
-      state.chatBusy = false;
-      state.chatStatus = null;
-      state.chatJobId = null;
-      state.chatStartTs = null;
+      state.chatBusy = false; state.chatStatus = null;
+      state.chatJobId = null; state.chatStartTs = null;
       const last = state.chat[state.chat.length - 1];
       if (last && last.role === 'assistant') {
-        // Strip any "Error: ..." left from a previous dropped connection
         if (last.content) last.content = last.content.replace(/\n?\n?Error: .+$/, '').trim();
+        if (!last.content && snapshot) last.content = snapshot.content;
         if (!last.content) last.content = '*(session expired)*';
       }
-      persistChat();
-      render();
-      return;
+      persistChat(); render(); return;
     }
-    // Server replays ALL buffered events — reset the last message to avoid
-    // duplicating content that was already received before the disconnect.
-    const lastMsg = state.chat[state.chat.length - 1];
+    // Server replays buffered events. Start from clean slate to avoid double-counting.
     if (lastMsg && lastMsg.role === 'assistant') {
       lastMsg.content = '';
       lastMsg.tools = [];
@@ -1322,6 +1318,7 @@ const reconnectChatJob = async (jobId) => {
     const reader = r.body.getReader();
     const dec = new TextDecoder();
     let buf = '';
+    let gotAny = false;
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -1330,86 +1327,85 @@ const reconnectChatJob = async (jobId) => {
       buf = lines.pop() || '';
       for (const line of lines) {
         if (!line.startsWith('data: ')) continue;
-        const payload = line.slice(6);
-        if (payload === '[DONE]') continue;
+        const p = line.slice(6);
+        if (p === '[DONE]') continue;
         try {
-          const j = JSON.parse(payload);
+          const j = JSON.parse(p);
+          gotAny = true;
           if (j.message?.content) {
             state.chatStatus = 'typing';
             state.chat[state.chat.length - 1].content += j.message.content;
             render();
           } else if (j.tool_call) {
-            state.chatStatus = `searching \u00B7 ${j.tool_call.name.replace(/^(get|list|read|web)_/, '')}`;
+            state.chatStatus = `${j.tool_call.name.replace(/^(get|list|read|web)_/, '')}`;
             const last = state.chat[state.chat.length - 1];
             if (!last.tools) last.tools = [];
             if (!last.tools.includes(j.tool_call.name)) last.tools.push(j.tool_call.name);
             render();
           } else if (j.tool_result) {
-            state.chatStatus = 'thinking';
-            render();
+            state.chatStatus = 'thinking'; render();
           }
         } catch {}
       }
+    }
+    // If reconnect produced nothing usable AND we had snapshot content, restore it
+    const last = state.chat[state.chat.length - 1];
+    if (last && last.role === 'assistant' && !last.content && snapshot && snapshot.content) {
+      last.content = snapshot.content;
+      last.tools = snapshot.tools;
     }
   } catch {}
   const last = state.chat[state.chat.length - 1];
   if (last && last.role === 'assistant') {
     last.ts = Date.now();
     last.elapsed_ms = state.chatStartTs ? Date.now() - state.chatStartTs : null;
+    if (!last.content && snapshot && snapshot.content) {
+      last.content = snapshot.content;
+      last.tools = snapshot.tools;
+    }
   }
-  state.chatJobId = null;
-  state.chatBusy = false;
-  state.chatStatus = null;
-  state.chatStartTs = null;
+  state.chatJobId = null; state.chatBusy = false;
+  state.chatStatus = null; state.chatStartTs = null;
   persistChat();
   if (state.activeChatId) saveChat().catch(() => {});
   render();
 };
 
-// ─── Polling ────────────────────────────────────────────────────────────
-const updateLivePanels = () => {
-  if (state.view !== 'dashboard') return;
-  const grid = document.querySelector('.grid');
-  if (!grid || grid.children.length < 3) return;
-  // Save scroll positions of the 3 live panels
-  const refs = [grid.children[0], grid.children[1], grid.children[2]];
-  const tops = refs.map(r => r.scrollTop);
-  refs[0].replaceWith(panelSystem());
-  refs[1].replaceWith(panelServices());
-  refs[2].replaceWith(panelActions());
-  for (let i = 0; i < 3; i++) grid.children[i].scrollTop = tops[i];
-  // Update header online indicator
-  const online = document.querySelector('.online');
-  if (online) {
-    online.className = state.stats ? 'online' : 'online offline';
-    online.textContent = state.stats ? 'ONLINE' : 'OFFLINE';
-  }
+// ─── Polling ───────────────────────────────────────────────────────────
+const pushHistory = (key, value) => {
+  if (value == null || isNaN(value)) return;
+  const arr = state.history[key];
+  arr.push(value);
+  if (arr.length > HISTORY_LEN) arr.shift();
 };
-
 const refresh = async () => {
   if (!token) return;
   const [stats, services, models, pull] = await Promise.all([
     api('/api/stats'),
     api('/api/services'),
     api('/api/models'),
-    api('/api/pull-progress')
+    api('/api/pull-progress'),
   ]);
-  if (stats) state.stats = stats;
+  if (stats) {
+    state.stats = stats;
+    pushHistory('cpu', stats.cpu?.avg);
+    pushHistory('ram', stats.memory?.percent);
+    pushHistory('net_in', stats.network?.recv_per_s);
+    pushHistory('net_out', stats.network?.sent_per_s);
+  }
   if (services) state.services = services;
   if (pull) state.pull = pull.lines;
 
   let needsRender = false;
   if (models?.models) {
-    const preferred = ['llama3.1:8b', 'hermes3:8b', 'llama3.2:3b', 'qwen2.5:7b'];
-    const byPref = (a, b) => {
-      const ia = preferred.indexOf(a.name);
-      const ib = preferred.indexOf(b.name);
+    const pref = ['llama3.1:8b', 'hermes3:8b', 'qwen2.5:7b', 'qwen2.5-coder:7b', 'llama3.2:3b'];
+    state.models = [...models.models].sort((a, b) => {
+      const ia = pref.indexOf(a.name), ib = pref.indexOf(b.name);
       if (ia === -1 && ib === -1) return 0;
       if (ia === -1) return 1;
       if (ib === -1) return -1;
       return ia - ib;
-    };
-    state.models = [...models.models].sort(byPref);
+    });
     if (!state.chatModel && state.models.length) {
       state.chatModel = state.models[0].name;
       needsRender = true;
@@ -1426,11 +1422,11 @@ const refresh = async () => {
     const s = await api('/api/code-agent/sessions');
     if (s?.active) state.codeAgent.sessions = s.active;
   }
-  if (needsRender) render();
-  else updateLivePanels();
+  // Always re-render so gauges/sparklines update — DOM rebuild is cheap
+  render();
 };
 
-// ─── Boot ───────────────────────────────────────────────────────────────
+// ─── Boot ──────────────────────────────────────────────────────────────
 const boot = async () => {
   restoreChat();
   restoreCode();
@@ -1439,46 +1435,61 @@ const boot = async () => {
   refresh();
   setInterval(refresh, 5000);
 
-  // Reconnect to active background job if tab was closed/refreshed
   if (state.chatBusy && state.chatJobId) {
-    // Strip "Error: Load failed" etc. persisted from a previous dropped connection
     const last = state.chat[state.chat.length - 1];
-    if (last && last.role === 'assistant' && last.content) {
+    if (last?.role === 'assistant' && last.content) {
       last.content = last.content.replace(/\n?\n?Error: .+$/, '').trim();
     }
-    state.chatStatus = 'reconnecting';
-    render();
+    state.chatStatus = 'reconnecting'; render();
     reconnectChatJob(state.chatJobId);
   }
 
-  // When the page comes back from background (mobile tab switch, lock screen),
-  // the SSE stream is often silently dead. Detect visibility change and reconnect.
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState !== 'visible') return;
     if (state.chatBusy && state.chatJobId) {
-      state.chatStatus = 'reconnecting';
-      render();
+      state.chatStatus = 'reconnecting'; render();
       reconnectChatJob(state.chatJobId);
     }
     if (state.codeAgent.busy && state.codeAgent.active) {
-      state.codeAgent.status = 'reconnecting';
-      render();
+      state.codeAgent.status = 'reconnecting'; render();
       caReconnect(state.codeAgent.active);
     }
   });
-  // Code-agent: if we had a session, refresh history + reattach if busy
   if (state.codeAgent.active) {
     try {
       const h = await api(`/api/code-agent/sessions/${state.codeAgent.active}/history`);
       if (h?.messages && h.messages.length >= state.codeAgent.messages.length) {
         state.codeAgent.messages = h.messages;
-        persistCode();
-        render();
+        persistCode(); render();
       }
     } catch {}
     if (state.codeAgent.busy) caReconnect(state.codeAgent.active);
   }
+
+  // Keyboard shortcuts: Cmd/Ctrl+K for new chat, Esc to close history/picker
+  document.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); newChat(); }
+    if (e.key === 'Escape') {
+      if (state.codeAgent.pickerOpen) { state.codeAgent.pickerOpen = false; render(); }
+      else if (state.codeAgent.historyOpen) {
+        if (state.codeAgent.historyView) {
+          state.codeAgent.historyView = null;
+          state.codeAgent.historyMessages = [];
+          state.codeAgent.historyCwd = null;
+        } else state.codeAgent.historyOpen = false;
+        render();
+      } else if (state.showSavedList) {
+        state.showSavedList = false; render();
+      }
+    }
+  });
 };
+
+// Inject Inter font
+const interLink = document.createElement('link');
+interLink.rel = 'stylesheet';
+interLink.href = 'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap';
+document.head.appendChild(interLink);
 
 if (!token) renderLogin();
 else boot();
