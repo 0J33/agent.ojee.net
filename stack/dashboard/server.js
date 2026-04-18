@@ -313,8 +313,11 @@ const TOOLS = [
       properties: {
         name: { type: 'string', description: 'Workflow name' },
         trigger: { type: 'string', enum: ['schedule', 'webhook', 'manual'], description: 'What fires the workflow. "manual" = user clicks a button in n8n to run it (great for testing).' },
-        every_hours: { type: 'number', description: 'For schedule: interval in hours (e.g. 1 for hourly). Default 1.' },
-        every_minutes: { type: 'number', description: 'For schedule: interval in minutes. Overrides every_hours if given.' },
+        at_time: { type: 'string', description: 'For schedule: time of day in 24h "HH:MM" form. Server converts to a daily cron. Example: "02:55" = daily at 2:55 AM. PREFER THIS over every_hours when the user says "at HH:MM" or "every day at X". REQUIRES timezone unless the user wants UTC.' },
+        cron: { type: 'string', description: 'For schedule: standard 5-field cron expression (min hour day-of-month month day-of-week). Example: "55 2 * * *" = daily at 02:55, "0 9 * * 1-5" = 9am every weekday. Use this for anything more complex than at_time.' },
+        every_hours: { type: 'number', description: 'For schedule: interval in hours (e.g. 1 for hourly). Use only for true intervals like "every 4 hours" — NOT for "at 4 AM".' },
+        every_minutes: { type: 'number', description: 'For schedule: interval in minutes. Use only for true intervals like "every 15 minutes" — NOT for "at H:55".' },
+        timezone: { type: 'string', description: 'IANA timezone name for schedule interpretation, e.g. "Africa/Cairo", "America/New_York", "Europe/London". Without this, at_time/cron run in UTC. ALWAYS set this when the user mentions a city/country/timezone.' },
         webhook_path: { type: 'string', description: 'For webhook: URL path (e.g. "my-hook")' },
         webhook_method: { type: 'string', enum: ['GET', 'POST'], description: 'For webhook: HTTP method, default POST' },
         steps: {
@@ -891,9 +894,21 @@ const runTool = async (name, args) => {
     };
     // Trigger
     if (args.trigger === 'schedule') {
-      const interval = args.every_minutes
-        ? { field: 'minutes', minutesInterval: args.every_minutes }
-        : { field: 'hours', hoursInterval: args.every_hours || 1 };
+      // Priority: at_time > cron > every_minutes > every_hours
+      let interval;
+      if (args.at_time) {
+        const m = String(args.at_time).match(/^(\d{1,2}):(\d{2})$/);
+        if (!m) throw new Error(`at_time must be "HH:MM" 24-hour format (e.g. "02:55"), got "${args.at_time}"`);
+        const hour = parseInt(m[1], 10), minute = parseInt(m[2], 10);
+        if (hour > 23 || minute > 59) throw new Error(`at_time "${args.at_time}" is out of range`);
+        interval = { field: 'cronExpression', expression: `${minute} ${hour} * * *` };
+      } else if (args.cron) {
+        interval = { field: 'cronExpression', expression: String(args.cron) };
+      } else if (args.every_minutes) {
+        interval = { field: 'minutes', minutesInterval: args.every_minutes };
+      } else {
+        interval = { field: 'hours', hoursInterval: args.every_hours || 1 };
+      }
       addNode({ id: 't1', name: 'Trigger', type: 'n8n-nodes-base.scheduleTrigger', typeVersion: 1.2,
         parameters: { rule: { interval: [interval] } } });
     } else if (args.trigger === 'webhook') {
@@ -961,7 +976,13 @@ const runTool = async (name, args) => {
     }
     const r = await n8nApi('/workflows', {
       method: 'POST',
-      body: JSON.stringify({ name: args.name, nodes, connections, settings: { executionOrder: 'v1' } })
+      body: JSON.stringify({
+        name: args.name, nodes, connections,
+        settings: {
+          executionOrder: 'v1',
+          ...(args.timezone ? { timezone: String(args.timezone) } : {}),
+        },
+      })
     });
     return { id: r.id, name: r.name, active: r.active, url: `https://agent.ojee.net/flow/workflow/${r.id}`, steps: nodes.length };
   }
@@ -1164,9 +1185,19 @@ Common failures and fixes:
 
 ### Triggers
 
-- schedule — runs on a cron. Fields: every_hours OR every_minutes.
+- schedule — runs on a cron / interval. Pick ONE of these (in priority order):
+    • at_time: "HH:MM"  →  daily at that wall-clock time. PREFER for "at 2:55 AM", "every day at 9", "morning at 7".
+    • cron: "min hr dom mon dow"  →  any cron pattern. Use for weekdays-only ("0 9 * * 1-5") or non-daily.
+    • every_minutes: N  →  fires every N minutes from activation. Use ONLY for true intervals like "every 15 minutes".
+    • every_hours: N    →  fires every N hours from activation. Use ONLY for true intervals like "every 4 hours".
+  ALWAYS set timezone (IANA name like "Africa/Cairo", "America/New_York") whenever the user mentions a city or country, otherwise the schedule fires in UTC.
 - webhook — fires on HTTP request to /webhook/<path>. Fields: webhook_path, webhook_method.
 - manual — user clicks "Execute Workflow" in n8n (great for testing).
+
+Schedule examples:
+- "remind me at 2:55 AM Cairo time daily" → trigger:"schedule", at_time:"02:55", timezone:"Africa/Cairo"
+- "every weekday at 9 AM in NYC" → trigger:"schedule", cron:"0 9 * * 1-5", timezone:"America/New_York"
+- "ping a URL every 15 minutes" → trigger:"schedule", every_minutes:15  (no time-of-day, no timezone needed)
 
 ### Always-available step kinds (no credentials needed)
 
