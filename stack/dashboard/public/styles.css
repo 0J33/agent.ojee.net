@@ -294,6 +294,23 @@ a { color: var(--accent); text-decoration: none; }
   font-size: 0.65rem; color: var(--text-dim);
   font-family: var(--font-mono);
 }
+.gauge-temp {
+  position: absolute; top: 6px; right: 6px;
+  display: inline-flex; align-items: center; gap: 3px;
+  font-family: var(--font-mono);
+  font-size: 0.6rem; font-weight: 600;
+  color: var(--text-muted);
+  padding: 2px 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  line-height: 1;
+}
+.gauge-temp svg { color: var(--text-faint); }
+.gauge-temp.warm { color: var(--warn); border-color: rgba(0, 170, 170, 0.45); }
+.gauge-temp.warm svg { color: var(--warn); }
+.gauge-temp.hot  { color: var(--danger); border-color: rgba(255, 68, 68, 0.45); }
+.gauge-temp.hot svg { color: var(--danger); }
 
 /* ─── System banner (uptime + os) ─────────────────────────────────────── */
 .sys-banner {

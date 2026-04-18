@@ -358,9 +358,16 @@ const gaugeSvg = (pct) => {
     <text class="gauge-text" x="50%" y="50%" dominant-baseline="middle" text-anchor="middle">${Math.round(pct)}%</text>
   </svg>`;
 };
-const gauge = (label, pct, sub) => {
+const gauge = (label, pct, sub, opts = {}) => {
   const cls = pct > 90 ? ' danger' : pct > 75 ? ' warn' : '';
-  return el('div', { class: 'gauge' + cls, html: `${gaugeSvg(pct)}<div class="gauge-label">${escapeHtml(label)}</div>${sub ? `<div class="gauge-sub">${escapeHtml(sub)}</div>` : ''}` });
+  let tempHtml = '';
+  if (opts.temp != null) {
+    const t = opts.temp;
+    const tcls = t > 85 ? ' hot' : t > 70 ? ' warm' : '';
+    tempHtml = `<span class="gauge-temp${tcls}"><svg viewBox="0 0 24 24" width="10" height="10" fill="none">${ICONS.temp}</svg>${t}°C</span>`;
+  }
+  return el('div', { class: 'gauge' + cls,
+    html: `${tempHtml}${gaugeSvg(pct)}<div class="gauge-label">${escapeHtml(label)}</div>${sub ? `<div class="gauge-sub">${escapeHtml(sub)}</div>` : ''}` });
 };
 
 // Sparkline SVG from values array (auto-scaled)
@@ -457,11 +464,11 @@ const panelSystem = () => {
   );
 
   const gauges = el('div', { class: 'gauge-grid' },
-    gauge('CPU', s.cpu.avg, `${cpuShort}${cpuTemp ? ' · ' + cpuTemp.current + '°C' : ''}`),
+    gauge('CPU', s.cpu.avg, cpuShort, { temp: cpuTemp ? cpuTemp.current : null }),
     gauge('RAM', s.memory.percent, `${fmtBytes(s.memory.used)} / ${fmtBytes(s.memory.total)}`),
     gauge('Disk /', s.disk.percent, `${fmtBytes(s.disk.used)} / ${fmtBytes(s.disk.total)}`),
     g && g.util != null
-      ? gauge('GPU', g.util, `${gpuShort}${g.temp != null ? ' · ' + g.temp + '°C' : ''}${g.vram_mb ? ' · ' + (g.vram_mb / 1024).toFixed(1) + 'G' : ''}`)
+      ? gauge('GPU', g.util, `${gpuShort}${g.vram_mb ? ' · ' + (g.vram_mb / 1024).toFixed(1) + 'G' : ''}`, { temp: g.temp })
       : null,
     s.swap && s.swap.total ? gauge('Swap', swapPct, `${fmtBytes(s.swap.used)} / ${fmtBytes(s.swap.total)}`) : null,
     s.home ? gauge('Disk /home', s.home.percent, `${fmtBytes(s.home.used)} / ${fmtBytes(s.home.total)}`) : null,
