@@ -691,11 +691,6 @@ const panelChatOllama = () => {
     log.appendChild(el('div', { class: 'chat-empty' },
       ico('message', 28),
       el('div', {}, 'Ask anything'),
-      el('div', { class: 'chat-empty-tips' },
-        el('span', { class: 'tip' }, 'weather in Cairo'),
-        el('span', { class: 'tip' }, 'list workflows'),
-        el('span', { class: 'tip' }, 'restart n8n'),
-      ),
     ));
   } else {
     state.chat.forEach((m, i) => log.appendChild(renderChatMsg(m, {
