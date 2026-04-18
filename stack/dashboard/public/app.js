@@ -356,10 +356,10 @@ const gaugeSvg = (pct, temp) => {
   const tHot = hasTemp && temp > 85;
   const tWarm = hasTemp && temp > 70;
   const tcls = tHot ? ' hot' : tWarm ? ' warm' : '';
-  const pctY = hasTemp ? '40%' : '50%';
+  const pctY = hasTemp ? '38%' : '50%';
   const pctCls = hasTemp ? ' with-temp' : '';
   const tempText = hasTemp
-    ? `<text class="gauge-temp-text${tcls}" x="50%" y="68%" dominant-baseline="middle" text-anchor="middle">${temp}°C</text>`
+    ? `<text class="gauge-temp-text${tcls}" x="50%" y="66%" dominant-baseline="middle" text-anchor="middle">${temp}°C</text>`
     : '';
   return `<svg viewBox="0 0 76 76" width="76" height="76">
     <circle class="gauge-track" cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke-width="6"/>
