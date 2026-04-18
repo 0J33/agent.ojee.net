@@ -691,9 +691,9 @@ a { color: var(--accent); text-decoration: none; }
 .chat-chip .chip-icon,
 .chat-chip .icon-wrap { display: inline-flex; align-items: center; line-height: 0; }
 .chat-chip svg { display: block; }
-.chip-model  { background: var(--accent-dim);   color: var(--accent);    border: 1px solid var(--border-accent); }
-.chip-tool   { background: var(--bg-elev-3);    color: var(--text-muted); border: 1px solid var(--border); }
-.chip-status { background: var(--warn-dim);     color: var(--warn);      border: 1px solid rgba(0, 170, 170, 0.4); }
+.chip-model  { background: var(--accent-dim);            color: var(--accent); border: 1px solid var(--border-accent); }
+.chip-tool   { background: rgba(120, 140, 180, 0.08);    color: #bcd;          border: 1px solid rgba(140, 170, 210, 0.22); }
+.chip-status { background: rgba(255, 180, 60, 0.08);     color: #f0c070;       border: 1px solid rgba(255, 180, 60, 0.25); }
 .chat-chips .chat-time { margin-left: auto; padding-right: 4px; }
 
 /* ─── Typing indicators ───────────────────────────────────────────────── */
