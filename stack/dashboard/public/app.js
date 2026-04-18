@@ -140,6 +140,7 @@ const ICONS = {
   send:     '<path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
   stop:     '<rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/>',
   spark:    '<path d="M12 2l2.39 7.36H22l-6.18 4.49L18.21 21 12 16.51 5.79 21l2.39-7.15L2 9.36h7.61L12 2z" fill="currentColor"/>',
+  model:    '<path fill="currentColor" d="M9 3h6v2h2a2 2 0 0 1 2 2v2h2v2h-2v2h2v2h-2v2a2 2 0 0 1-2 2h-2v2H9v-2H7a2 2 0 0 1-2-2v-2H3v-2h2v-2H3v-2h2V7a2 2 0 0 1 2-2h2V3zm0 6v6h6V9H9z"/>',
   message:  '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v10z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" fill="none"/>',
   code:     '<path d="M16 18l6-6-6-6M8 6l-6 6 6 6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
   folder:   '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" fill="none"/>',
@@ -647,7 +648,7 @@ const renderChatMsg = (m, opts = {}) => {
   const timeDisplay = (timeStr ? timeStr : '') + (durStr ? (timeStr ? ' · ' : '') + durStr : '');
 
   const chipRow = el('div', { class: 'chat-chips' },
-    model ? chip('model', model, 'spark') : null,
+    model ? chip('model', model, 'model') : null,
     ...tools.map(t => chip('tool', toolLabel(t), toolIcon(t))),
     ...filesChanged.map(f => chip('tool', f, 'file')),
     statusText ? chip('status', statusText + '…', 'spinner') : null,

@@ -508,8 +508,10 @@ a { color: var(--accent); text-decoration: none; }
 .saved-item:hover { background: var(--bg-elev-2); }
 .saved-item.active { background: var(--accent-dim); border-left: 2px solid var(--accent); padding-left: 8px; }
 .saved-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
-.saved-actions { display: flex; gap: 0; flex-shrink: 0; opacity: 0; transition: opacity 120ms; }
-.saved-item:hover .saved-actions { opacity: 1; }
+.saved-actions { display: flex; gap: 0; flex-shrink: 0; opacity: 0.55; transition: opacity 120ms; }
+.saved-item:hover .saved-actions,
+.ca-sess:hover .saved-actions,
+.ca-hist-list .saved-item .saved-actions { opacity: 1; }
 .saved-actions .btn { padding: 4px; min-height: 24px; width: 24px; color: var(--text-dim); }
 .saved-actions .btn:hover { color: var(--text); }
 .saved-actions .btn.danger { color: var(--danger); }
@@ -677,8 +679,11 @@ a { color: var(--accent); text-decoration: none; }
   border-radius: 999px;
   letter-spacing: 0.02em;
   white-space: nowrap;
+  line-height: 1;
 }
-.chat-chip .chip-icon { display: inline-flex; align-items: center; }
+.chat-chip .chip-icon,
+.chat-chip .icon-wrap { display: inline-flex; align-items: center; line-height: 0; }
+.chat-chip svg { display: block; }
 .chip-model  { background: var(--accent-dim);   color: var(--accent);    border: 1px solid var(--border-accent); }
 .chip-tool   { background: var(--bg-elev-3);    color: var(--text-muted); border: 1px solid var(--border); }
 .chip-status { background: var(--warn-dim);     color: var(--warn);      border: 1px solid rgba(0, 170, 170, 0.4); }
