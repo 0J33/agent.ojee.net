@@ -474,11 +474,18 @@ a { color: var(--accent); text-decoration: none; }
   display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap;
 }
 .chat-select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
   background: var(--bg-elev-2);
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23b3b3b3' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M6 9l6 6 6-6'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  background-size: 14px;
   border: 1px solid var(--border);
   color: var(--text);
   font-size: 0.78rem;
-  padding: 7px 10px;
+  padding: 7px 28px 7px 10px;
   min-height: 32px;
   border-radius: var(--r-sm);
   flex: 1; min-width: 120px;

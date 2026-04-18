@@ -134,6 +134,9 @@ const ICONS = {
   download: '<path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
   power:    '<path d="M12 2v10M5 6.3a9 9 0 1 0 14 0" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/>',
   arrow:    '<path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
+  arrow_left: '<path d="M19 12H5M11 18l-6-6 6-6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
+  chevron_down: '<path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
+  x:        '<path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
   plus:     '<path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
   trash:    '<path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6h14z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/>',
   pencil:   '<path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
@@ -433,7 +436,12 @@ const panelSystem = () => {
   const g = s.gpu;
   const truncate = (str, n) => !str ? '' : (str.length <= n ? str : str.slice(0, n - 1) + '…');
   const cpuShort = truncate(s.cpu.model || '', 24);
-  const gpuShort = g ? truncate(`${g.vendor ? g.vendor + ' ' : ''}${g.model || ''}`, 24) : '';
+  // Some lspci entries already include the vendor in the model string (e.g.
+  // "NVIDIA GeForce MX250") so don't prepend it again.
+  const gpuName = g ? (g.model || '') : '';
+  const gpuVendor = g && g.vendor && !gpuName.toLowerCase().includes(g.vendor.toLowerCase())
+    ? g.vendor + ' ' : '';
+  const gpuShort = truncate(gpuVendor + gpuName, 24);
 
   const swapPct = s.swap?.total ? Math.round((s.swap.used / s.swap.total) * 100) : 0;
 
@@ -1089,7 +1097,7 @@ const panelChatCode = () => {
   if (ca.pickerOpen) {
     const rows = [];
     if (ca.pickerParent && ca.pickerParent !== ca.pickerPath) {
-      rows.push(el('div', { class: 'ca-dir-row', onclick: () => caLoadDir(ca.pickerParent) }, ico('folder', 14), el('span', {}, '..')));
+      rows.push(el('div', { class: 'ca-dir-row', onclick: () => caLoadDir(ca.pickerParent) }, ico('arrow_left', 14), el('span', {}, 'Up a level')));
     }
     for (const e of ca.pickerEntries.filter(x => x.type === 'dir')) {
       rows.push(el('div', { class: 'ca-dir-row', onclick: () => caLoadDir(e.path) }, ico('folder', 14), el('span', {}, e.name)));
@@ -1121,10 +1129,10 @@ const panelChatCode = () => {
       return el('div', { class: 'panel chat-panel', 'data-panel': 'chat' },
         el('div', { class: 'panel-head' }, el('span', {}, 'History'), chatModesSwitch()),
         el('div', { class: 'btn-row' },
-          el('button', { class: 'btn sm', onclick: () => { ca.historyView = null; ca.historyMessages = []; ca.historyCwd = null; render(); } }, '← Back'),
+          el('button', { class: 'btn sm', onclick: () => { ca.historyView = null; ca.historyMessages = []; ca.historyCwd = null; render(); } }, ico('arrow_left', 14), ' Back'),
           toolCount > 0 ? el('button', { class: 'btn sm', onclick: () => { ca.historyShowTools = !ca.historyShowTools; render(); } },
             ca.historyShowTools ? `Hide tools (${toolCount})` : `Show tools (${toolCount})`) : null,
-          ca.historyCwd ? el('button', { class: 'btn sm primary', onclick: caContinue }, 'Continue →') : null,
+          ca.historyCwd ? el('button', { class: 'btn sm primary', onclick: caContinue }, 'Continue ', ico('arrow', 14)) : null,
         ),
         el('div', { class: 'ca-hist-title' }, ca.historyView.title),
         el('div', { class: 'ca-hist-meta' }, `${ca.historyView.project} · ${ca.historyView.messageCount} events${ca.historyCwd ? ' · ' + ca.historyCwd : ''}`),
@@ -1133,7 +1141,7 @@ const panelChatCode = () => {
     }
     return el('div', { class: 'panel chat-panel', 'data-panel': 'chat' },
       el('div', { class: 'panel-head' }, el('span', {}, 'History'), chatModesSwitch()),
-      el('button', { class: 'btn sm', onclick: () => { ca.historyOpen = false; render(); } }, '← Back'),
+      el('button', { class: 'btn sm', onclick: () => { ca.historyOpen = false; render(); } }, ico('arrow_left', 14), ' Back'),
       ca.historyList.length === 0
         ? el('div', { class: 'muted', style: 'padding:20px;text-align:center;font-size:0.78rem' }, 'no past conversations')
         : el('div', { class: 'ca-hist-list' },
