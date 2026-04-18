@@ -344,8 +344,9 @@ const renderBottomTabs = () => {
 };
 
 // ─── SVG primitives: gauge + sparkline ─────────────────────────────────
-// Returns a circular gauge SVG (arc fills based on percent 0-100)
-const gaugeSvg = (pct, color = 'var(--accent)') => {
+// Returns a circular gauge SVG. Stroke color comes from CSS via the parent's
+// .warn/.danger class — don't set inline stroke here or it'd override CSS.
+const gaugeSvg = (pct) => {
   const r = 30, cx = 38, cy = 38;
   const circ = 2 * Math.PI * r;
   const dash = (Math.max(0, Math.min(100, pct)) / 100) * circ;
@@ -353,7 +354,7 @@ const gaugeSvg = (pct, color = 'var(--accent)') => {
     <circle class="gauge-track" cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke-width="6"/>
     <circle class="gauge-fill" cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke-width="6"
       stroke-dasharray="${dash} ${circ}" stroke-linecap="round"
-      transform="rotate(-90 ${cx} ${cy})" style="stroke:${color}"/>
+      transform="rotate(-90 ${cx} ${cy})"/>
     <text class="gauge-text" x="50%" y="50%" dominant-baseline="middle" text-anchor="middle">${Math.round(pct)}%</text>
   </svg>`;
 };
