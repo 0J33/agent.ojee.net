@@ -314,7 +314,8 @@ const TOOLS = [
               owner: { type: 'string', description: 'github: repo owner' },
               repo: { type: 'string', description: 'github: repo name' },
               operation: { type: 'string', description: 'github/clickup/trello: operation (get, create, etc.)' },
-              list: { type: 'string', description: 'clickup/trello: list ID' }
+              list: { type: 'string', description: 'clickup/trello: list ID' },
+              chat_id: { type: 'string', description: 'telegram: chat ID' }
             },
             required: ['kind']
           }

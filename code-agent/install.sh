@@ -40,9 +40,8 @@ sed "s|ExecStart=/usr/bin/node|ExecStart=$NODE_BIN|" "$SCRIPT_DIR/code-agent.ser
 echo "  using node: $NODE_BIN"
 systemctl --user daemon-reload
 
-echo "[5/5] enable + restart"
-systemctl --user enable code-agent.service >/dev/null 2>&1 || true
-systemctl --user restart code-agent.service
+echo "[5/5] enable + start"
+systemctl --user enable --now code-agent.service
 sleep 1
 systemctl --user status code-agent.service --no-pager | head -12 || true
 
