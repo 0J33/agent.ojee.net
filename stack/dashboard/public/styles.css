@@ -275,7 +275,7 @@ a { color: var(--accent); text-decoration: none; }
   position: relative;
   overflow: hidden;
 }
-.gauge svg { width: 64px; height: 64px; }
+.gauge > svg { width: 64px; height: 64px; }
 .gauge .gauge-track { stroke: var(--bg-elev-3); }
 .gauge .gauge-fill { stroke: var(--accent); transition: stroke-dasharray 600ms ease, stroke 200ms; }
 .gauge.warn .gauge-fill { stroke: var(--warn); }
@@ -306,7 +306,7 @@ a { color: var(--accent); text-decoration: none; }
   border-radius: 999px;
   line-height: 1;
 }
-.gauge-temp svg { color: var(--text-faint); }
+.gauge-temp svg { width: 10px; height: 10px; color: var(--text-faint); flex-shrink: 0; }
 .gauge-temp.warm { color: var(--warn); border-color: rgba(0, 170, 170, 0.45); }
 .gauge-temp.warm svg { color: var(--warn); }
 .gauge-temp.hot  { color: var(--danger); border-color: rgba(255, 68, 68, 0.45); }
@@ -872,7 +872,7 @@ a { color: var(--accent); text-decoration: none; }
   .chat-input { min-height: 44px; padding: 12px 14px; font-size: 16px; }
   .chat-send { min-height: 44px; }
   .gauge { padding: var(--sp-2); }
-  .gauge svg { width: 72px; height: 72px; }
+  .gauge > svg { width: 72px; height: 72px; }
   .bottom-tabs { display: flex; }
   .toast-stack { left: var(--sp-3); right: var(--sp-3); bottom: calc(80px + var(--safe-bottom)); }
 }
@@ -880,7 +880,7 @@ a { color: var(--accent); text-decoration: none; }
 @media (max-width: 380px) {
   .header-right { gap: var(--sp-2); }
   .gauge-grid { grid-template-columns: 1fr; }
-  .gauge svg { width: 80px; height: 80px; }
+  .gauge > svg { width: 80px; height: 80px; }
 }
 
 @media (max-width: 900px) and (orientation: landscape) {

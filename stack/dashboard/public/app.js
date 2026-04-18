@@ -359,11 +359,14 @@ const gaugeSvg = (pct) => {
   </svg>`;
 };
 const gauge = (label, pct, sub, opts = {}) => {
-  const cls = pct > 90 ? ' danger' : pct > 75 ? ' warn' : '';
+  const t = opts.temp;
+  const tHot = t != null && t > 85;
+  const tWarm = t != null && t > 70;
+  const cls = (pct > 90 || tHot) ? ' danger'
+            : (pct > 75 || tWarm) ? ' warn' : '';
   let tempHtml = '';
-  if (opts.temp != null) {
-    const t = opts.temp;
-    const tcls = t > 85 ? ' hot' : t > 70 ? ' warm' : '';
+  if (t != null) {
+    const tcls = tHot ? ' hot' : tWarm ? ' warm' : '';
     tempHtml = `<span class="gauge-temp${tcls}"><svg viewBox="0 0 24 24" width="10" height="10" fill="none">${ICONS.temp}</svg>${t}°C</span>`;
   }
   return el('div', { class: 'gauge' + cls,
@@ -465,12 +468,12 @@ const panelSystem = () => {
 
   const gauges = el('div', { class: 'gauge-grid' },
     gauge('CPU', s.cpu.avg, cpuShort, { temp: cpuTemp ? cpuTemp.current : null }),
-    gauge('RAM', s.memory.percent, `${fmtBytes(s.memory.used)} / ${fmtBytes(s.memory.total)}`),
-    gauge('Disk /', s.disk.percent, `${fmtBytes(s.disk.used)} / ${fmtBytes(s.disk.total)}`),
     g && g.util != null
       ? gauge('GPU', g.util, `${gpuShort}${g.vram_mb ? ' · ' + (g.vram_mb / 1024).toFixed(1) + 'G' : ''}`, { temp: g.temp })
       : null,
+    gauge('RAM', s.memory.percent, `${fmtBytes(s.memory.used)} / ${fmtBytes(s.memory.total)}`),
     s.swap && s.swap.total ? gauge('Swap', swapPct, `${fmtBytes(s.swap.used)} / ${fmtBytes(s.swap.total)}`) : null,
+    gauge('Disk /', s.disk.percent, `${fmtBytes(s.disk.used)} / ${fmtBytes(s.disk.total)}`),
     s.home ? gauge('Disk /home', s.home.percent, `${fmtBytes(s.home.used)} / ${fmtBytes(s.home.total)}`) : null,
   );
 
