@@ -278,6 +278,34 @@ const TOOLS = [
   { type: 'function', function: { name: 'n8n_activate_workflow', description: 'Activate a workflow (turns it on so triggers fire).', parameters: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } } },
   { type: 'function', function: { name: 'n8n_deactivate_workflow', description: 'Deactivate a workflow (stops triggers).', parameters: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } } },
   { type: 'function', function: {
+    name: 'n8n_run_workflow',
+    description: 'Execute a workflow once via the n8n CLI inside the n8n container, regardless of trigger type. Returns the CLI exit code, stdout tail, and the latest execution record (id, status, error if any). USE THIS to test/debug a workflow you just built or patched — combine with n8n_get_execution to see node-by-node output and error messages.',
+    parameters: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] }
+  } },
+  { type: 'function', function: {
+    name: 'n8n_list_executions',
+    description: 'List recent executions for a workflow, newest first. Returns [{id, status: success|error|running, startedAt, stoppedAt, mode}]. Use to find an execution id to inspect with n8n_get_execution.',
+    parameters: { type: 'object', properties: { workflow_id: { type: 'string' }, limit: { type: 'number', description: 'default 10' } }, required: ['workflow_id'] }
+  } },
+  { type: 'function', function: {
+    name: 'n8n_get_execution',
+    description: 'Fetch a single execution including the per-node run data and any error messages. The result has shape { id, status, error?, nodes: { [name]: { error?, output_sample? } } } where output_sample is the first 500 chars of the node\'s JSON output. USE this to see WHY a workflow failed — read the error.message and the failing node\'s sample.',
+    parameters: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] }
+  } },
+  { type: 'function', function: {
+    name: 'n8n_patch_node',
+    description: 'Patch a single node\'s parameters in an existing workflow without rewriting the whole nodes array. Identify the node by id (e.g. "s1") OR by name (e.g. "HTTP 1"). The given parameters are merged shallowly into the node\'s existing parameters. Use this to fix a bad URL, change a Discord message, etc., when n8n_get_workflow shows what to change.',
+    parameters: {
+      type: 'object',
+      properties: {
+        workflow_id: { type: 'string' },
+        node: { type: 'string', description: 'Node id (e.g. "s1") or name (e.g. "HTTP 1")' },
+        parameters: { type: 'object', description: 'Object merged into node.parameters. Pass only the keys you want to change.' }
+      },
+      required: ['workflow_id', 'node', 'parameters']
+    }
+  } },
+  { type: 'function', function: {
     name: 'n8n_quick_workflow',
     description: 'Build a simple n8n workflow from a high-level description without needing to know n8n schema. PREFER THIS over n8n_create_workflow for anything simple. Pass name, trigger (schedule or webhook), and a list of steps. The server builds valid n8n JSON.',
     parameters: {
@@ -353,6 +381,16 @@ const normalizeArgs = (args) => {
 // are filtered out of the advertised set so the model doesn't promise what
 // the user can't run.
 const rl = (value, mode = 'id') => ({ __rl: true, value: String(value == null ? '' : value), mode });
+// Wrap a string in n8n's expression form ('=...') if it contains {{...}} but
+// isn't already prefixed. n8n treats parameter values as literal strings
+// unless they start with '=' — without this, "{{$json.field}}" arrives at
+// Discord verbatim instead of being resolved.
+const expr = (v) => {
+  if (v == null) return v;
+  const s = String(v);
+  if (s.startsWith('=')) return s;
+  return /\{\{[\s\S]*?\}\}/.test(s) ? '=' + s : s;
+};
 
 // `requires` lists fields the user must supply (no sensible default exists).
 // Aliases let the model spell the same thing several ways. The validator
@@ -366,7 +404,7 @@ const N8N_INTEGRATIONS = {
     ],
     params: s => ({
       authentication: 'webhook', resource: 'message',
-      content: s.message || s.content || s.text || '', options: {},
+      content: expr(s.message || s.content || s.text || ''), options: {},
     }),
   },
   discord_bot: {
@@ -379,7 +417,7 @@ const N8N_INTEGRATIONS = {
     params: s => ({
       authentication: 'botToken', resource: 'message',
       guildId: rl(s.guild || '', 'id'), channelId: rl(s.channel || '', 'id'),
-      content: s.message || s.content || s.text || '', options: {},
+      content: expr(s.message || s.content || s.text || ''), options: {},
     }),
   },
   slack: {
@@ -393,7 +431,7 @@ const N8N_INTEGRATIONS = {
         authentication: 'accessToken', resource: 'message', operation: 'post',
         select: 'channel',
         channelId: rl(ch, /^C[A-Z0-9]{6,}$/i.test(ch) ? 'id' : 'name'),
-        text: s.message || s.content || s.text || '', otherOptions: {},
+        text: expr(s.message || s.content || s.text || ''), otherOptions: {},
       };
     },
   },
@@ -406,9 +444,9 @@ const N8N_INTEGRATIONS = {
     params: s => ({
       resource: 'databasePage', operation: 'create',
       databaseId: rl(s.database || '', 'id'),
-      title: s.title || '', simple: true,
+      title: expr(s.title || ''), simple: true,
       propertiesUi: { propertyValues: [] },
-      blockUi: s.content ? { blockValues: [{ type: 'paragraph', textContent: s.content }] } : { blockValues: [] },
+      blockUi: s.content ? { blockValues: [{ type: 'paragraph', textContent: expr(s.content) }] } : { blockValues: [] },
     }),
   },
   github: {
@@ -422,7 +460,7 @@ const N8N_INTEGRATIONS = {
       authentication: 'accessToken',
       resource: s.resource || 'issue', operation: s.operation || 'create',
       owner: rl(s.owner || '', 'name'), repository: rl(s.repo || '', 'name'),
-      title: s.title || '', body: s.content || s.message || s.text || '',
+      title: expr(s.title || ''), body: expr(s.content || s.message || s.text || ''),
       labels: [], assignees: [],
     }),
   },
@@ -434,8 +472,8 @@ const N8N_INTEGRATIONS = {
     ],
     params: s => ({
       resource: 'task', operation: s.operation || 'create',
-      list: s.list || '', name: s.title || s.name || '',
-      additionalFields: s.content ? { description: s.content } : {},
+      list: s.list || '', name: expr(s.title || s.name || ''),
+      additionalFields: s.content ? { description: expr(s.content) } : {},
     }),
   },
   trello: {
@@ -446,7 +484,7 @@ const N8N_INTEGRATIONS = {
     ],
     params: s => ({
       resource: 'card', operation: s.operation || 'create',
-      listId: s.list || '', name: s.title || s.name || '', description: s.content || '',
+      listId: s.list || '', name: expr(s.title || s.name || ''), description: expr(s.content || ''),
     }),
   },
   sheets: {
@@ -470,8 +508,8 @@ const N8N_INTEGRATIONS = {
     params: s => ({
       resource: 'event', operation: s.operation || 'create',
       calendar: rl(s.calendar || 'primary', 'id'),
-      start: s.start || '', end: s.end || s.start || '',
-      additionalFields: { summary: s.title || 'Event', description: s.content || '' },
+      start: expr(s.start || ''), end: expr(s.end || s.start || ''),
+      additionalFields: { summary: expr(s.title || 'Event'), description: expr(s.content || '') },
     }),
   },
   docs: {
@@ -482,7 +520,7 @@ const N8N_INTEGRATIONS = {
     params: s => ({
       operation: s.operation || 'create',
       folderId: rl(s.folder || 'root', 'id'),
-      title: s.title || 'Untitled', body: s.content || s.text || '',
+      title: expr(s.title || 'Untitled'), body: expr(s.content || s.text || ''),
     }),
   },
   drive: {
@@ -492,7 +530,7 @@ const N8N_INTEGRATIONS = {
     ],
     params: s => ({
       resource: 'file', operation: s.operation || 'upload',
-      name: s.title || s.name || 'untitled.txt',
+      name: expr(s.title || s.name || 'untitled.txt'),
       driveId: rl('My Drive', 'list'), folderId: rl(s.folder || 'root', 'id'),
     }),
   },
@@ -505,8 +543,8 @@ const N8N_INTEGRATIONS = {
     ],
     params: s => ({
       resource: 'message', operation: 'send',
-      subject: s.subject || '', bodyContent: s.body || s.text || s.message || '',
-      bodyContentType: 'html', toRecipients: s.to || '', additionalFields: {},
+      subject: expr(s.subject || ''), bodyContent: expr(s.body || s.text || s.message || ''),
+      bodyContentType: 'html', toRecipients: expr(s.to || ''), additionalFields: {},
     }),
   },
 };
@@ -682,6 +720,143 @@ const runTool = async (name, args) => {
   if (name === 'n8n_deactivate_workflow') {
     return await n8nApi(`/workflows/${args.id}/deactivate`, { method: 'POST' });
   }
+  if (name === 'n8n_run_workflow') {
+    // n8n's CLI requires an "Execute Workflow Trigger" node. Add one
+    // temporarily, run, then clean it up. Works regardless of the workflow's
+    // real trigger type (schedule/webhook/manual). Port override avoids
+    // colliding with the running n8n's task broker on 5679.
+    const id = args.id;
+    if (!id) throw new Error('id required');
+    const TEMP_ID = '__test_runner__';
+    const wf = await n8nApi(`/workflows/${id}`);
+    if (wf.nodes.find(n => n.id === TEMP_ID)) {
+      // Stale trigger from a prior crash — strip it before re-adding
+      wf.nodes = wf.nodes.filter(n => n.id !== TEMP_ID);
+      delete wf.connections[TEMP_ID];
+    }
+    // Find the node downstream of the original trigger so we can connect to it
+    const realTrigger = wf.nodes.find(n => /Trigger$|webhook$/i.test(n.type) || n.type.endsWith('manualTrigger'));
+    const firstStep = realTrigger && wf.connections[realTrigger.name]
+      && wf.connections[realTrigger.name].main && wf.connections[realTrigger.name].main[0]
+      && wf.connections[realTrigger.name].main[0][0] && wf.connections[realTrigger.name].main[0][0].node;
+    if (!firstStep) {
+      throw new Error('Workflow has no downstream node from its trigger to test');
+    }
+    const tempNode = {
+      id: TEMP_ID, name: TEMP_ID,
+      type: 'n8n-nodes-base.executeWorkflowTrigger', typeVersion: 1,
+      position: [50, 100], parameters: {},
+    };
+    wf.nodes.push(tempNode);
+    wf.connections[TEMP_ID] = { main: [[{ node: firstStep, type: 'main', index: 0 }]] };
+    const putBody = (w) => JSON.stringify({
+      name: w.name, nodes: w.nodes, connections: w.connections,
+      settings: w.settings || { executionOrder: 'v1' },
+    });
+    await n8nApi(`/workflows/${id}`, { method: 'PUT', body: putBody(wf) });
+
+    // Run via CLI
+    const runCli = () => new Promise((resolve) => {
+      const child = spawn('docker', ['exec',
+        '-e', 'N8N_RUNNERS_BROKER_PORT=5689',
+        'n8n', 'n8n', 'execute', '--id', id], { timeout: 120000 });
+      let out = '', err = '';
+      child.stdout.on('data', d => out += d.toString());
+      child.stderr.on('data', d => err += d.toString());
+      child.on('close', code => resolve({ code, out, err }));
+      child.on('error', e => resolve({ code: -1, out: '', err: e.message }));
+    });
+    let r;
+    try {
+      r = await runCli();
+    } finally {
+      // Always clean up the temp trigger
+      try {
+        const wf2 = await n8nApi(`/workflows/${id}`);
+        wf2.nodes = wf2.nodes.filter(n => n.id !== TEMP_ID);
+        delete wf2.connections[TEMP_ID];
+        await n8nApi(`/workflows/${id}`, { method: 'PUT', body: putBody(wf2) });
+      } catch {}
+    }
+    // Summarize the latest execution
+    let latest = null;
+    try {
+      const exr = await n8nApi(`/executions?workflowId=${id}&limit=1&includeData=true`);
+      const list = exr.data || exr || [];
+      if (list.length) {
+        const ex = list[0];
+        const rd = ex.data && ex.data.resultData;
+        const errMsg = rd && rd.error ? String(rd.error.message || rd.error).slice(0, 400) : null;
+        const errNode = rd && rd.error && rd.error.node ? rd.error.node.name : null;
+        latest = { id: ex.id, status: ex.status, finished: ex.finished, mode: ex.mode,
+                   stoppedAt: ex.stoppedAt, error: errMsg, error_node: errNode };
+      }
+    } catch {}
+    return {
+      cli_exit: r.code,
+      cli_output: ((r.out || '') + (r.err ? '\n' + r.err : '')).slice(-1200),
+      latest_execution: latest,
+    };
+  }
+  if (name === 'n8n_list_executions') {
+    if (!args.workflow_id) throw new Error('workflow_id required');
+    const limit = args.limit || 10;
+    const r = await n8nApi(`/executions?workflowId=${encodeURIComponent(args.workflow_id)}&limit=${limit}`);
+    const list = r.data || r || [];
+    return list.map(e => ({
+      id: e.id, status: e.status, finished: e.finished, mode: e.mode,
+      startedAt: e.startedAt, stoppedAt: e.stoppedAt,
+    }));
+  }
+  if (name === 'n8n_get_execution') {
+    if (!args.id) throw new Error('id required');
+    const ex = await n8nApi(`/executions/${args.id}?includeData=true`);
+    const rd = ex.data && ex.data.resultData;
+    const out = {
+      id: ex.id, status: ex.status, finished: ex.finished, mode: ex.mode,
+      startedAt: ex.startedAt, stoppedAt: ex.stoppedAt,
+      workflowId: ex.workflowId,
+      error: null, error_node: null,
+      nodes: {},
+    };
+    if (rd && rd.error) {
+      out.error = String(rd.error.message || rd.error).slice(0, 500);
+      out.error_node = rd.error.node && rd.error.node.name;
+    }
+    if (rd && rd.runData) {
+      for (const [name, runs] of Object.entries(rd.runData)) {
+        const run = runs[0];
+        if (!run) continue;
+        const node = { error: null, output_sample: null };
+        if (run.error) node.error = String(run.error.message || run.error).slice(0, 400);
+        const items = run.data && run.data.main && run.data.main[0];
+        if (items && items.length) {
+          const sample = items[0].json !== undefined ? items[0].json : items[0];
+          try { node.output_sample = JSON.stringify(sample).slice(0, 500); } catch {}
+        }
+        out.nodes[name] = node;
+      }
+    }
+    return out;
+  }
+  if (name === 'n8n_patch_node') {
+    if (!args.workflow_id || !args.node || !args.parameters) {
+      throw new Error('workflow_id, node, and parameters are required');
+    }
+    const wf = await n8nApi(`/workflows/${args.workflow_id}`);
+    const target = String(args.node);
+    const node = wf.nodes.find(n => n.id === target || n.name === target);
+    if (!node) {
+      throw new Error(`node "${args.node}" not found. Available: ${wf.nodes.map(n => `${n.id} (${n.name})`).join(', ')}`);
+    }
+    node.parameters = { ...(node.parameters || {}), ...args.parameters };
+    const body = {
+      name: wf.name, nodes: wf.nodes, connections: wf.connections,
+      settings: wf.settings || { executionOrder: 'v1' },
+    };
+    await n8nApi(`/workflows/${args.workflow_id}`, { method: 'PUT', body: JSON.stringify(body) });
+    return { ok: true, patched_node: { id: node.id, name: node.name }, parameters: node.parameters };
+  }
   if (name === 'n8n_quick_workflow') {
     // Model sometimes sends nested arrays/objects as strings. Coerce.
     const coerce = (v) => {
@@ -735,19 +910,26 @@ const runTool = async (name, args) => {
       const s = steps[i];
       const id = `s${i + 1}`;
       if (s.kind === 'http') {
-        const params = { method: s.method || 'GET', url: s.url, options: {} };
-        if (s.body) { params.sendBody = true; params.contentType = 'json'; params.jsonBody = s.body; }
+        const params = { method: s.method || 'GET', url: expr(s.url), options: {} };
+        if (s.body) { params.sendBody = true; params.contentType = 'json'; params.jsonBody = expr(s.body); }
         addNode({ id, name: `HTTP ${i + 1}`, type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, parameters: params });
       } else if (s.kind === 'llm') {
+        // The prompt may contain {{$json.x}} expressions that must be
+        // resolved when n8n builds the request body, not at template time.
+        // We pass jsonBody as an n8n expression so it resolves per-execution.
+        const promptExpr = expr(s.prompt || '');
+        const isExprPrompt = typeof promptExpr === 'string' && promptExpr.startsWith('=');
+        const jsonBody = isExprPrompt
+          ? `={{ JSON.stringify({ model: ${JSON.stringify(s.model || 'llama3.1:8b')}, prompt: ${promptExpr.slice(1)}, stream: false }) }}`
+          : JSON.stringify({ model: s.model || 'llama3.1:8b', prompt: s.prompt || '', stream: false });
         addNode({ id, name: `LLM ${i + 1}`, type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2,
           parameters: {
             method: 'POST', url: 'http://host.docker.internal:11434/api/generate', options: {},
-            sendBody: true, contentType: 'json',
-            jsonBody: JSON.stringify({ model: s.model || 'llama3.1:8b', prompt: s.prompt || '', stream: false })
+            sendBody: true, contentType: 'json', jsonBody,
           } });
       } else if (s.kind === 'set') {
         addNode({ id, name: `Set ${i + 1}`, type: 'n8n-nodes-base.set', typeVersion: 3.4,
-          parameters: { assignments: { assignments: [{ id: `a${i}`, name: s.field, value: s.value, type: 'string' }] } } });
+          parameters: { assignments: { assignments: [{ id: `a${i}`, name: s.field, value: expr(s.value), type: 'string' }] } } });
       } else if (N8N_INTEGRATIONS[s.kind]) {
         const integs = await getIntegrations();
         const integ = integs[s.kind];
@@ -770,7 +952,7 @@ const runTool = async (name, args) => {
         addNode(node);
       } else if (s.kind === 'email') {
         addNode({ id, name: `Email ${i + 1}`, type: 'n8n-nodes-base.emailSend', typeVersion: 2.1,
-          parameters: { toEmail: s.to, subject: s.subject, text: s.text, options: {} } });
+          parameters: { toEmail: expr(s.to), subject: expr(s.subject), text: expr(s.text), options: {} } });
       } else {
         // Unknown step kind — skip it rather than failing the whole workflow
         addNode({ id, name: `Note ${i + 1}`, type: 'n8n-nodes-base.set', typeVersion: 3.4,
@@ -888,6 +1070,7 @@ const buildSystemPrompt = async () => {
 - get_stats() / get_services() / list_models() — this server.
 - read_file(path) / list_dir(path) — host filesystem, read-only. Stack at /home/ojee/stack. Never read .env files.
 - n8n_quick_workflow / n8n_list_workflows / n8n_activate_workflow / n8n_get_workflow / n8n_create_workflow / n8n_update_workflow / n8n_deactivate_workflow — build and manage automations.
+- n8n_run_workflow / n8n_list_executions / n8n_get_execution / n8n_patch_node — TEST and DEBUG and EDIT workflows. After building or modifying a workflow, you can verify it works without asking the user to click anything in n8n.
 
 ### When to use each tool
 
@@ -963,7 +1146,21 @@ When the user DOES ask for a workflow:
 - CALL n8n_quick_workflow directly. Do NOT describe steps, do NOT write a tutorial, do NOT show example JSON in text — the tool call IS the answer.
 - Credentials are ALREADY attached by the server. NEVER ask the user for API keys, webhook URLs, bot tokens, OAuth logins, or IDs that aren't specific to their task.
 - If the user doesn't specify details ("make a basic workflow"), pick sensible defaults (trigger "manual", one "set" step with a demo value) and build it — do NOT ask for clarification.
-- After building, report the URL: https://agent.ojee.net/flow/workflow/<id> — and ask before activating.
+- After building, TEST THE WORKFLOW (see "Test + debug" below) before reporting it as done.
+- Report the URL: https://agent.ojee.net/flow/workflow/<id> — and ask before activating.
+
+### Test + debug + fix loop (REQUIRED after building or modifying a workflow)
+
+1. Run it: n8n_run_workflow({ id }) — executes once via the n8n CLI regardless of trigger type. Returns latest_execution with status (success|error) plus an error summary if it failed.
+2. If status is "error": n8n_get_execution({ id: latest_execution.id }) to see node-by-node errors and a sample of each node's output. Read the failing node's error message and look at upstream nodes' output_sample to understand what data was actually flowing.
+3. Fix the bad node: n8n_patch_node({ workflow_id, node, parameters }) — pass ONLY the changed parameter keys; they get merged into the existing node parameters. Identify the node by its id (e.g. "s1") or its name (e.g. "HTTP 1") from n8n_get_workflow.
+4. Re-run with n8n_run_workflow. Repeat steps 2-4 (max ~3 iterations) until status is "success".
+5. Then tell the user the workflow works and give them the URL.
+
+Common failures and fixes:
+- HTTP 404 / "resource you are requesting could not be found" → the URL is wrong. Use the open-meteo/dictionary/etc. URLs from the free-APIs section. NEVER use weather.com/openweathermap.com — both return HTML (or are paid). Open-meteo is the only correct free weather source.
+- Discord/Slack message shows "{{$json.body}}" literally → you used the wrong field path. Check the http step's output_sample to find the real field (e.g. {{$json.current.temperature_2m}} for open-meteo).
+- "Cannot read properties of undefined" → the upstream step didn't produce that field. Look at output_sample to see what fields exist.
 
 ### Triggers
 
