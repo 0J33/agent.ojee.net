@@ -282,10 +282,10 @@ a { color: var(--accent); text-decoration: none; }
 .gauge.danger .gauge-fill { stroke: var(--danger); }
 .gauge .gauge-text {
   font-family: var(--font-mono);
-  font-size: 11px; font-weight: 600;
+  font-size: 12px; font-weight: 600;
   fill: var(--text);
 }
-.gauge .gauge-text.with-temp { font-size: 10px; }
+.gauge .gauge-text.with-temp { font-size: 11px; }
 .gauge .gauge-label {
   font-size: 0.65rem; font-weight: 500; letter-spacing: 0.5px;
   color: var(--text-muted);
@@ -297,7 +297,7 @@ a { color: var(--accent); text-decoration: none; }
 }
 /* Temperature text rendered INSIDE the gauge SVG (below the percent) so it
    reads as a native part of the gauge instead of a tacked-on badge. */
-.gauge-temp-text { font-family: var(--font-mono); font-size: 6.5px; font-weight: 500; fill: var(--text-dim); }
+.gauge-temp-text { font-family: var(--font-mono); font-size: 9px; font-weight: 500; fill: var(--text-dim); }
 .gauge-temp-text.warm { fill: var(--warn); }
 .gauge-temp-text.hot  { fill: var(--danger); }
 
