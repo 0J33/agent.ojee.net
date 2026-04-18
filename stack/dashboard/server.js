@@ -291,11 +291,11 @@ const TOOLS = [
         webhook_method: { type: 'string', enum: ['GET', 'POST'], description: 'For webhook: HTTP method, default POST' },
         steps: {
           type: 'array',
-          description: 'Ordered list of steps. Each step: { kind: "http"|"llm"|"set"|"email", ... }',
+          description: 'Ordered list of steps. Each step has a "kind" and kind-specific fields. Supported kinds: http, llm, set, email, discord, slack, gmail, notion, github, clickup, trello, telegram. All integrations auto-discover credentials from n8n.',
           items: {
             type: 'object',
             properties: {
-              kind: { type: 'string', enum: ['http', 'llm', 'set', 'email'] },
+              kind: { type: 'string', enum: ['http', 'llm', 'set', 'email', 'discord', 'slack', 'gmail', 'notion', 'github', 'clickup', 'trello', 'telegram'] },
               url: { type: 'string', description: 'http: target URL' },
               method: { type: 'string', description: 'http: GET/POST/etc, default GET' },
               body: { type: 'string', description: 'http: JSON body string for POST' },
@@ -305,7 +305,16 @@ const TOOLS = [
               value: { type: 'string', description: 'set: new field value' },
               to: { type: 'string', description: 'email: recipient' },
               subject: { type: 'string', description: 'email: subject' },
-              text: { type: 'string', description: 'email: body text' }
+              text: { type: 'string', description: 'email/telegram: body text' },
+              message: { type: 'string', description: 'discord/slack/telegram: message content to send' },
+              channel: { type: 'string', description: 'slack: channel name (default "general")' },
+              database: { type: 'string', description: 'notion: database ID to create page in' },
+              title: { type: 'string', description: 'notion/clickup/trello: page or card title' },
+              content: { type: 'string', description: 'notion: page content' },
+              owner: { type: 'string', description: 'github: repo owner' },
+              repo: { type: 'string', description: 'github: repo name' },
+              operation: { type: 'string', description: 'github/clickup/trello: operation (get, create, etc.)' },
+              list: { type: 'string', description: 'clickup/trello: list ID' }
             },
             required: ['kind']
           }
@@ -328,6 +337,36 @@ const normalizeArgs = (args) => {
   if (!args.path && args.file_path) args.path = args.file_path;
   return args;
 };
+
+// ─── n8n integration step kinds ─────────────────────────────────────────
+// Maps step kind → { type, version, credType, params(step) }
+// Credential is auto-discovered from n8n's credential store at build time.
+const N8N_INTEGRATIONS = {
+  discord:   { type: 'n8n-nodes-base.discord',     version: 2,   credType: 'discordWebhookApi',
+               params: s => ({ content: s.message || s.content || s.text || '' }) },
+  slack:     { type: 'n8n-nodes-base.slack',        version: 2.2, credType: 'slackOAuth2Api',
+               params: s => ({ resource: 'message', operation: 'post', channel: s.channel || 'general',
+                               text: s.message || s.content || s.text || '' }) },
+  gmail:     { type: 'n8n-nodes-base.gmail',        version: 2.1, credType: 'gmailOAuth2',
+               params: s => ({ resource: 'message', operation: 'send', sendTo: s.to || '',
+                               subject: s.subject || '', message: s.body || s.text || s.message || '', options: {} }) },
+  notion:    { type: 'n8n-nodes-base.notion',       version: 2.2, credType: 'notionOAuth2Api',
+               params: s => ({ resource: 'page', operation: 'create', databaseId: s.database || '',
+                               title: s.title || '', ...(s.content ? { content: s.content } : {}) }) },
+  github:    { type: 'n8n-nodes-base.github',       version: 1,   credType: 'githubOAuth2Api',
+               params: s => ({ owner: s.owner || '', repository: s.repo || '',
+                               resource: s.resource || 'issue', operation: s.operation || 'get' }) },
+  clickup:   { type: 'n8n-nodes-base.clickUp',      version: 1,   credType: 'clickUpOAuth2Api',
+               params: s => ({ resource: 'task', operation: s.operation || 'create',
+                               name: s.title || s.name || '', list: s.list || '' }) },
+  trello:    { type: 'n8n-nodes-base.trello',       version: 1,   credType: 'trelloApi',
+               params: s => ({ resource: 'card', operation: s.operation || 'create',
+                               name: s.title || s.name || '', listId: s.list || '' }) },
+  telegram:  { type: 'n8n-nodes-base.telegram',     version: 1.2, credType: 'telegramApi',
+               params: s => ({ resource: 'message', operation: 'sendMessage',
+                               chatId: s.chat_id || '', text: s.message || s.text || '' }) },
+};
+let _credCache = null; // cache n8n credentials per process lifetime
 
 const runTool = async (name, args) => {
   args = normalizeArgs(args);
@@ -483,7 +522,9 @@ const runTool = async (name, args) => {
       throw new Error(`unsupported trigger: ${args.trigger} (use "schedule", "webhook", or "manual")`);
     }
     // Steps
-    (args.steps || []).forEach((s, i) => {
+    const steps = args.steps || [];
+    for (let i = 0; i < steps.length; i++) {
+      const s = steps[i];
       const id = `s${i + 1}`;
       if (s.kind === 'http') {
         const params = { method: s.method || 'GET', url: s.url, options: {} };
@@ -499,6 +540,18 @@ const runTool = async (name, args) => {
       } else if (s.kind === 'set') {
         addNode({ id, name: `Set ${i + 1}`, type: 'n8n-nodes-base.set', typeVersion: 3.4,
           parameters: { assignments: { assignments: [{ id: `a${i}`, name: s.field, value: s.value, type: 'string' }] } } });
+      } else if (N8N_INTEGRATIONS[s.kind]) {
+        const integ = N8N_INTEGRATIONS[s.kind];
+        const node = { id, name: `${s.kind.charAt(0).toUpperCase() + s.kind.slice(1)} ${i + 1}`,
+          type: integ.type, typeVersion: integ.version, parameters: integ.params(s) };
+        if (integ.credType) {
+          try {
+            if (!_credCache) _credCache = await n8nApi('/credentials').then(r => r.data || r);
+            const cred = _credCache.find(c => c.type === integ.credType);
+            if (cred) node.credentials = { [integ.credType]: { id: cred.id, name: cred.name } };
+          } catch {}
+        }
+        addNode(node);
       } else if (s.kind === 'email') {
         addNode({ id, name: `Email ${i + 1}`, type: 'n8n-nodes-base.emailSend', typeVersion: 2.1,
           parameters: { toEmail: s.to, subject: s.subject, text: s.text, options: {} } });
@@ -507,7 +560,7 @@ const runTool = async (name, args) => {
         addNode({ id, name: `Note ${i + 1}`, type: 'n8n-nodes-base.set', typeVersion: 3.4,
           parameters: { assignments: { assignments: [{ id: `a${i}`, name: 'skipped_step', value: `unsupported kind: ${s.kind}`, type: 'string' }] } } });
       }
-    });
+    }
     const r = await n8nApi('/workflows', {
       method: 'POST',
       body: JSON.stringify({ name: args.name, nodes, connections, settings: { executionOrder: 'v1' } })
@@ -565,7 +618,7 @@ Tool results may contain Title, description, og:description, Content sections. T
 The user has OAuth / API credentials configured in n8n for:
 Discord, Slack, Notion, Gmail, Outlook (Microsoft Graph), Google Drive, GitHub, Cloudflare, ClickUp, Spotify, Trello, Ollama (local LLMs).
 
-When the user asks "can you X" or "what can you automate", mention these. You still can only BUILD workflows via n8n_quick_workflow (trigger + http/llm/set/email steps). For anything beyond that set, tell the user it'll need to be built in the n8n UI and offer to describe the nodes.
+When the user asks "can you X" or "what can you automate", mention these. You can BUILD workflows via n8n_quick_workflow with step kinds: http, llm, set, email, discord, slack, gmail, notion, github, clickup, trello, telegram. All credentials are ALREADY configured in n8n — just use the right "kind" and the server auto-discovers the credential. NEVER ask for webhook URLs, API keys, or credentials — they are already set up.
 
 ### Preferred free no-auth APIs (use web_fetch)
 
@@ -599,6 +652,10 @@ When the user IS asking for a workflow, prefer n8n_quick_workflow. Triggers: "sc
 - Schedule ping: trigger "schedule", every_hours N, step kind "http" with url
 - Webhook LLM: trigger "webhook", webhook_path "foo", step kind "llm" with a prompt
 - Digest: trigger "schedule", step kind "llm" then step kind "email"
+- Discord alert: trigger "schedule", step kind "http" to fetch data, then step kind "discord" with message
+- Slack notification: trigger "webhook", step kind "slack" with channel and message
+- Gmail send: trigger "manual", step kind "gmail" with to, subject, body
+- IMPORTANT: All integration credentials (Discord, Slack, Gmail, Notion, GitHub, ClickUp, Trello, Telegram) are ALREADY configured in n8n. Use the matching step kind directly. Do NOT use kind "email"/"http" as a workaround. Do NOT ask for webhook URLs or API keys.
 
 Only drop to n8n_create_workflow if quick_workflow can't express it. After create, give the user the workflow URL (https://agent.ojee.net/flow/workflow/<id>) and ask before activating.
 
@@ -614,7 +671,10 @@ Q: "what's 42 squared"
 → Answer "1764" directly, no tool.
 
 Q: "make me a workflow that pings google every 10 min"
-→ n8n_quick_workflow({name:"Ping Google", trigger:"schedule", every_minutes:10, steps:[{kind:"http", url:"https://google.com"}]})`;
+→ n8n_quick_workflow({name:"Ping Google", trigger:"schedule", every_minutes:10, steps:[{kind:"http", url:"https://google.com"}]})
+
+Q: "send me a discord message with the weather every day"
+→ n8n_quick_workflow({name:"Daily Weather Discord", trigger:"schedule", every_hours:24, steps:[{kind:"http", url:"https://api.open-meteo.com/v1/forecast?latitude=30.03&longitude=31.35&current=temperature_2m,weather_code&timezone=auto"}, {kind:"discord", message:"Today's weather: {{$json.current.temperature_2m}}°C"}]})`;
 
 const processChatJob = async (job, model, messages) => {
   const emit = (evt) => {
@@ -644,8 +704,13 @@ const processChatJob = async (job, model, messages) => {
   // cannot call irrelevant ones.
   const lastUser = (messages.filter(m => m.role === 'user').pop()?.content || '').trim();
   const isGreeting = lastUser.length < 12 || /^(hi+|hey+|hello+|sup|yo+|ok|okay|thanks|thank you|cool|nice|lol|bye+|good\s+(morning|afternoon|evening|night))[\s.!?]*$/i.test(lastUser);
-  const wantsN8n = /\b(workflow|automation|automate|cron|n8n|webhook|schedule[rd]?|pipeline)\b/i.test(lastUser)
-    || /\b(build|create|make|set\s*up|list|activate|deactivate|modify|delete|remove|update)\b.{0,40}\b(flow|workflow|automation|job|webhook)\b/i.test(lastUser);
+  // Check the ENTIRE conversation for n8n context, not just the last message.
+  // Follow-ups like "Activate it" or "Fix it" don't contain n8n keywords
+  // but the conversation is clearly about n8n workflows.
+  const n8nRe = /\b(workflow|automation|automate|cron|n8n|webhook|schedule[rd]?|pipeline)\b/i;
+  const n8nActionRe = /\b(build|create|make|set\s*up|list|activate|deactivate|modify|delete|remove|update)\b.{0,40}\b(flow|workflow|automation|job|webhook)\b/i;
+  const allText = messages.map(m => m.content || '').join(' ');
+  const wantsN8n = n8nRe.test(lastUser) || n8nActionRe.test(lastUser) || n8nRe.test(allText);
   const pickTools = () => {
     if (isGreeting) return [];
     return wantsN8n ? TOOLS : TOOLS.filter(t => !t.function.name.startsWith('n8n_'));
@@ -665,6 +730,21 @@ const processChatJob = async (job, model, messages) => {
       let textOut = msg.content || '';
       if (!toolCalls.length && textOut) {
         const toolNames = TOOLS.map(t => t.function.name);
+        // Repair common JSON issues from model output
+        const repairJson = (s) => {
+          s = s.replace(/:\s*([A-Z_][A-Z0-9_]{2,})\s*([,}\]])/gi, ':"$1"$2'); // unquoted values
+          s = s.replace(/,\s*([}\]])/g, '$1'); // trailing commas
+          return s;
+        };
+        const tryParse = (s) => {
+          try { return JSON.parse(s); } catch {}
+          try { return JSON.parse(repairJson(s)); } catch {}
+          // Coerce JS syntax (unquoted keys, single-quoted values)
+          try {
+            return JSON.parse(s.replace(/([{,]\s*)([a-zA-Z_]\w*)\s*:/g, '$1"$2":').replace(/:\s*'([^']*)'/g, ':"$1"'));
+          } catch {}
+          return null;
+        };
         const extractJsonAt = (s, from) => {
           let depth = 0, end = -1, inStr = false, esc = false;
           for (let idx = from; idx < s.length; idx++) {
@@ -685,39 +765,61 @@ const processChatJob = async (job, model, messages) => {
           const braceStart = textOut.indexOf('{', fnMatch.index);
           const block = extractJsonAt(textOut, braceStart);
           if (block) {
-            try {
-              // Coerce JS object syntax to JSON: unquoted keys, single-quoted values
-              const jsonified = block
-                .replace(/([{,]\s*)([a-zA-Z_]\w*)\s*:/g, '$1"$2":')
-                .replace(/:\s*'([^']*)'/g, ':"$1"');
-              const args = JSON.parse(jsonified);
-              toolCalls = [{ function: { name: fnMatch[1].toLowerCase(), arguments: args } }];
-            } catch {
-              // If JSON parse fails, try with the raw block
-              try {
-                const args = JSON.parse(block);
-                toolCalls = [{ function: { name: fnMatch[1].toLowerCase(), arguments: args } }];
-              } catch {}
-            }
+            const args = tryParse(block);
+            if (args) toolCalls = [{ function: { name: fnMatch[1].toLowerCase(), arguments: args } }];
           }
         }
         // Strategy 2: look for {"name":"toolName", ...} JSON pattern
         if (!toolCalls.length && textOut.includes('"name"')) {
+          // Deduplicate: model sometimes outputs same JSON block twice concatenated
+          const half = Math.floor(textOut.length / 2);
+          if (textOut.length > 40 && textOut.slice(0, half) === textOut.slice(half)) {
+            textOut = textOut.slice(0, half);
+          }
           let cursor = 0;
           while (cursor < textOut.length) {
             const start = textOut.indexOf('{', cursor);
             if (start < 0) break;
-            const block = extractJsonAt(textOut, start);
-            if (!block) break;
-            try {
-              const parsed = JSON.parse(block);
-              if (parsed.name && toolNames.includes(parsed.name)) {
-                const fnArgs = parsed.arguments || parsed.parameters || parsed.args || {};
-                toolCalls = [{ function: { name: parsed.name, arguments: fnArgs } }];
-                break;
+            let block = extractJsonAt(textOut, start);
+            // Repair: if extractJsonAt returns null, the model likely forgot
+            // closing braces.  Try appending up to 3 '}' to close the object.
+            if (!block) {
+              const tail = textOut.slice(start);
+              for (let extra = 1; extra <= 3; extra++) {
+                const attempt = tail + '}'.repeat(extra);
+                if (tryParse(attempt)) { block = attempt; break; }
               }
-            } catch {}
+              if (!block) break;
+            }
+            const parsed = tryParse(block);
+            if (parsed && parsed.name && toolNames.includes(parsed.name)) {
+              const fnArgs = parsed.arguments || parsed.parameters || parsed.args || {};
+              toolCalls = [{ function: { name: parsed.name, arguments: fnArgs } }];
+              break;
+            }
             cursor = start + block.length;
+          }
+        }
+        // Strategy 3: regex fallback — model mentioned a tool name but JSON extraction failed
+        if (!toolCalls.length) {
+          const nameRe = new RegExp(`["']?(${toolNames.join('|')})["']?`, 'i');
+          const nm = nameRe.exec(textOut);
+          if (nm) {
+            const afterName = textOut.slice(nm.index);
+            const braceIdx = afterName.indexOf('{');
+            if (braceIdx !== -1) {
+              let tail = afterName.slice(braceIdx);
+              // Count open braces and close them
+              let open = 0;
+              for (const ch of tail) { if (ch === '{') open++; if (ch === '}') open--; }
+              if (open > 0) tail += '}'.repeat(open);
+              const args = tryParse(tail);
+              if (args) {
+                // The parsed block might be {name, parameters:{...}} or just the args
+                const fnArgs = args.arguments || args.parameters || args.args || args;
+                toolCalls = [{ function: { name: nm[1].toLowerCase(), arguments: fnArgs } }];
+              }
+            }
           }
         }
       }
