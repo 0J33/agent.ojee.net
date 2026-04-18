@@ -354,145 +354,186 @@ const normalizeArgs = (args) => {
 // the user can't run.
 const rl = (value, mode = 'id') => ({ __rl: true, value: String(value == null ? '' : value), mode });
 
+// `requires` lists fields the user must supply (no sensible default exists).
+// Aliases let the model spell the same thing several ways. The validator
+// considers a requirement satisfied if any alias is non-empty OR if any
+// chained-step n8n expression is used (e.g. {{$json.title}}).
 const N8N_INTEGRATIONS = {
   discord: {
     type: 'n8n-nodes-base.discord', version: 2, credType: 'discordWebhookApi', label: 'Discord (webhook)',
+    requires: [
+      { field: 'message', aliases: ['content', 'text'], hint: 'the text to send to the Discord channel (can use n8n expressions like {{$json.field}})' },
+    ],
     params: s => ({
-      authentication: 'webhook',
-      resource: 'message',
-      content: s.message || s.content || s.text || '',
-      options: {},
+      authentication: 'webhook', resource: 'message',
+      content: s.message || s.content || s.text || '', options: {},
     }),
   },
   discord_bot: {
     type: 'n8n-nodes-base.discord', version: 2, credType: 'discordBotApi', label: 'Discord (bot)',
+    requires: [
+      { field: 'guild', hint: 'the Discord server (guild) ID — a long numeric string from Server Settings → Widget' },
+      { field: 'channel', hint: 'the Discord channel ID (right-click channel → Copy ID; requires Developer Mode)' },
+      { field: 'message', aliases: ['content', 'text'], hint: 'the text to send' },
+    ],
     params: s => ({
-      authentication: 'botToken',
-      resource: 'message',
-      guildId: rl(s.guild || '', 'id'),
-      channelId: rl(s.channel || '', 'id'),
-      content: s.message || s.content || s.text || '',
-      options: {},
+      authentication: 'botToken', resource: 'message',
+      guildId: rl(s.guild || '', 'id'), channelId: rl(s.channel || '', 'id'),
+      content: s.message || s.content || s.text || '', options: {},
     }),
   },
   slack: {
     type: 'n8n-nodes-base.slack', version: 2.2, credType: 'slackApi', label: 'Slack',
+    requires: [
+      { field: 'message', aliases: ['content', 'text'], hint: 'the text to post in Slack' },
+    ],
     params: s => {
       const ch = String(s.channel || 'general').replace(/^#/, '');
       return {
-        authentication: 'accessToken',
-        resource: 'message',
-        operation: 'post',
+        authentication: 'accessToken', resource: 'message', operation: 'post',
         select: 'channel',
         channelId: rl(ch, /^C[A-Z0-9]{6,}$/i.test(ch) ? 'id' : 'name'),
-        text: s.message || s.content || s.text || '',
-        otherOptions: {},
+        text: s.message || s.content || s.text || '', otherOptions: {},
       };
     },
   },
   notion: {
     type: 'n8n-nodes-base.notion', version: 2.2, credType: 'notionApi', label: 'Notion',
+    requires: [
+      { field: 'database', hint: 'the Notion database UUID — open the database in Notion, copy the URL, the 32-char ID is the database UUID. The database must also be SHARED with the Notion integration in Notion (DB page → Connections → add)' },
+      { field: 'title', hint: 'the title of the page to create' },
+    ],
     params: s => ({
-      resource: 'databasePage',
-      operation: 'create',
+      resource: 'databasePage', operation: 'create',
       databaseId: rl(s.database || '', 'id'),
-      title: s.title || '',
-      simple: true,
+      title: s.title || '', simple: true,
       propertiesUi: { propertyValues: [] },
-      blockUi: s.content
-        ? { blockValues: [{ type: 'paragraph', textContent: s.content }] }
-        : { blockValues: [] },
+      blockUi: s.content ? { blockValues: [{ type: 'paragraph', textContent: s.content }] } : { blockValues: [] },
     }),
   },
   github: {
     type: 'n8n-nodes-base.github', version: 1.1, credType: 'githubApi', label: 'GitHub',
+    requires: [
+      { field: 'owner', hint: 'GitHub username or org that owns the repo' },
+      { field: 'repo', hint: 'GitHub repository name (without owner prefix)' },
+      { field: 'title', hint: 'the issue/PR title (only required for create operations)' },
+    ],
     params: s => ({
       authentication: 'accessToken',
-      resource: s.resource || 'issue',
-      operation: s.operation || 'create',
-      owner: rl(s.owner || '', 'name'),
-      repository: rl(s.repo || '', 'name'),
-      title: s.title || '',
-      body: s.content || s.message || s.text || '',
+      resource: s.resource || 'issue', operation: s.operation || 'create',
+      owner: rl(s.owner || '', 'name'), repository: rl(s.repo || '', 'name'),
+      title: s.title || '', body: s.content || s.message || s.text || '',
       labels: [], assignees: [],
     }),
   },
   clickup: {
     type: 'n8n-nodes-base.clickUp', version: 1, credType: 'clickUpApi', label: 'ClickUp',
+    requires: [
+      { field: 'list', hint: 'the ClickUp list ID — open the list in ClickUp, copy the URL, the trailing number is the list ID' },
+      { field: 'title', aliases: ['name'], hint: 'the task name' },
+    ],
     params: s => ({
-      resource: 'task',
-      operation: s.operation || 'create',
-      list: s.list || '',
-      name: s.title || s.name || '',
+      resource: 'task', operation: s.operation || 'create',
+      list: s.list || '', name: s.title || s.name || '',
       additionalFields: s.content ? { description: s.content } : {},
     }),
   },
   trello: {
     type: 'n8n-nodes-base.trello', version: 1, credType: 'trelloApi', label: 'Trello',
+    requires: [
+      { field: 'list', hint: 'the Trello list ID — get it from a Trello list URL or via the Trello API' },
+      { field: 'title', aliases: ['name'], hint: 'the card name' },
+    ],
     params: s => ({
-      resource: 'card',
-      operation: s.operation || 'create',
-      listId: s.list || '',
-      name: s.title || s.name || '',
-      description: s.content || '',
+      resource: 'card', operation: s.operation || 'create',
+      listId: s.list || '', name: s.title || s.name || '', description: s.content || '',
     }),
   },
   sheets: {
     type: 'n8n-nodes-base.googleSheets', version: 4.5, credType: 'googleSheetsOAuth2Api', label: 'Google Sheets',
+    requires: [
+      { field: 'document', aliases: ['sheet'], hint: 'the Google Sheets spreadsheet ID — the long string in the URL between /d/ and /edit' },
+    ],
     params: s => ({
-      resource: 'sheet',
-      operation: s.operation || 'append',
+      resource: 'sheet', operation: s.operation || 'append',
       documentId: rl(s.document || s.sheet || '', 'id'),
       sheetName: rl(s.tab || 'Sheet1', 'name'),
-      columns: { mappingMode: 'autoMapInputData', value: {} },
-      options: {},
+      columns: { mappingMode: 'autoMapInputData', value: {} }, options: {},
     }),
   },
   calendar: {
     type: 'n8n-nodes-base.googleCalendar', version: 1.2, credType: 'googleCalendarOAuth2Api', label: 'Google Calendar',
+    requires: [
+      { field: 'start', hint: 'event start time as ISO 8601 datetime, e.g. "2026-04-20T10:00:00Z" or "2026-04-20T13:00:00+02:00"' },
+      { field: 'title', hint: 'the event title (becomes the calendar entry summary)' },
+    ],
     params: s => ({
-      resource: 'event',
-      operation: s.operation || 'create',
+      resource: 'event', operation: s.operation || 'create',
       calendar: rl(s.calendar || 'primary', 'id'),
-      start: s.start || '',
-      end: s.end || s.start || '',
-      additionalFields: {
-        summary: s.title || 'Event',
-        description: s.content || '',
-      },
+      start: s.start || '', end: s.end || s.start || '',
+      additionalFields: { summary: s.title || 'Event', description: s.content || '' },
     }),
   },
   docs: {
     type: 'n8n-nodes-base.googleDocs', version: 2, credType: 'googleDocsOAuth2Api', label: 'Google Docs',
+    requires: [
+      { field: 'title', hint: 'the document title' },
+    ],
     params: s => ({
       operation: s.operation || 'create',
       folderId: rl(s.folder || 'root', 'id'),
-      title: s.title || 'Untitled',
-      body: s.content || s.text || '',
+      title: s.title || 'Untitled', body: s.content || s.text || '',
     }),
   },
   drive: {
     type: 'n8n-nodes-base.googleDrive', version: 3, credType: 'googleDriveOAuth2Api', label: 'Google Drive',
+    requires: [
+      { field: 'title', aliases: ['name'], hint: 'the file name to create (with extension, e.g. "report.txt")' },
+    ],
     params: s => ({
-      resource: 'file',
-      operation: s.operation || 'upload',
+      resource: 'file', operation: s.operation || 'upload',
       name: s.title || s.name || 'untitled.txt',
-      driveId: rl('My Drive', 'list'),
-      folderId: rl(s.folder || 'root', 'id'),
+      driveId: rl('My Drive', 'list'), folderId: rl(s.folder || 'root', 'id'),
     }),
   },
   outlook: {
     type: 'n8n-nodes-base.microsoftOutlook', version: 2, credType: 'microsoftOutlookOAuth2Api', label: 'Outlook (email)',
+    requires: [
+      { field: 'to', hint: 'the recipient email address' },
+      { field: 'subject', hint: 'the email subject line' },
+      { field: 'body', aliases: ['text', 'message'], hint: 'the email body (HTML or plain text)' },
+    ],
     params: s => ({
-      resource: 'message',
-      operation: 'send',
-      subject: s.subject || '',
-      bodyContent: s.body || s.text || s.message || '',
-      bodyContentType: 'html',
-      toRecipients: s.to || '',
-      additionalFields: {},
+      resource: 'message', operation: 'send',
+      subject: s.subject || '', bodyContent: s.body || s.text || s.message || '',
+      bodyContentType: 'html', toRecipients: s.to || '', additionalFields: {},
     }),
   },
+};
+
+// Returns a list of {stepIndex, kind, field, hint} for missing required fields.
+// A field counts as present if any alias is set OR if it contains an n8n
+// expression ({{ ... }}) — those reference upstream steps and are only
+// resolvable at runtime.
+const validateSteps = (steps) => {
+  const missing = [];
+  const isPresent = v => {
+    if (v == null) return false;
+    const s = String(v).trim();
+    return s.length > 0;
+  };
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i] || {};
+    const integ = N8N_INTEGRATIONS[step.kind];
+    if (!integ || !integ.requires) continue;
+    for (const req of integ.requires) {
+      const names = [req.field, ...(req.aliases || [])];
+      if (!names.some(n => isPresent(step[n]))) {
+        missing.push({ stepIndex: i + 1, kind: step.kind, field: req.field, hint: req.hint });
+      }
+    }
+  }
+  return missing;
 };
 
 // ─── Runtime credential discovery ───────────────────────────────────────
@@ -650,6 +691,18 @@ const runTool = async (name, args) => {
     };
     args.steps = coerce(args.steps);
     if (!Array.isArray(args.steps)) args.steps = [];
+    // Preflight: are required fields per integration step actually filled?
+    // Returning a structured tool result lets the model ask the user instead
+    // of building a workflow that will fail at runtime.
+    const missing = validateSteps(args.steps);
+    if (missing.length) {
+      const lines = missing.map(m => `  • step ${m.stepIndex} (${m.kind}) — "${m.field}": ${m.hint}`).join('\n');
+      return {
+        status: 'MISSING_INFO',
+        missing,
+        message: `Cannot build workflow "${args.name || 'untitled'}" yet. The following required fields are missing:\n${lines}\n\nAsk the user to provide these, then call n8n_quick_workflow again with the same args plus the new values. Do NOT invent placeholder IDs.`,
+      };
+    }
     const nodes = [];
     const connections = {};
     let x = 250, prev = null;
@@ -749,37 +802,54 @@ setInterval(() => {
 // Built per-request from the live set of configured n8n credentials so the
 // model only advertises integrations it can actually run. Recipes are full
 // worked JSON so small local models can pattern-match.
+// Each recipe lists fields as [REQ] (must come from the user; the server
+// will reject the call with MISSING_INFO if absent) or [OPT] (server has a
+// sensible default). Local models pattern-match best when the required vs
+// optional contract is explicit.
 const INTEG_RECIPES = {
-  discord: `- discord — post a message to Discord via webhook (SIMPLEST, default for Discord):
-    { kind: "discord", message: "Hello from n8n" }
-  The webhook URL lives in the credential. You do NOT supply a URL or channel.
-  Supports n8n expressions: message: "Weather today: {{$json.current.temperature_2m}}°C"`,
-  discord_bot: `- discord_bot — post via Discord bot (needs guild + channel IDs):
-    { kind: "discord_bot", guild: "SERVER_ID", channel: "CHANNEL_ID", message: "..." }`,
+  discord: `- discord — post to Discord via webhook (SIMPLEST default for Discord):
+    { kind: "discord", message: "Hello" }
+  Required: message [REQ] (text or n8n expression like "{{$json.current.temperature_2m}}°C")
+  The webhook URL is in the credential — never ask the user for it.`,
+  discord_bot: `- discord_bot — post via Discord bot:
+    { kind: "discord_bot", guild: "SERVER_ID", channel: "CHANNEL_ID", message: "..." }
+  Required: guild [REQ], channel [REQ] (Discord IDs — long numbers, get via right-click → Copy ID with Developer Mode on), message [REQ]`,
   slack: `- slack — post to a Slack channel:
     { kind: "slack", channel: "general", message: "Deploy finished" }
-  channel is a name WITHOUT "#" (e.g. "general"), OR a channel ID starting with "C".`,
+  Required: message [REQ]   Optional: channel [OPT, default "general", no "#" prefix; can be channel name or ID starting with "C"]`,
   notion: `- notion — create a page in a Notion database:
-    { kind: "notion", database: "DATABASE_UUID", title: "Page title", content: "Body text" }
-  database is the 32-char UUID from the DB URL. The user must share the DB with the integration.`,
-  github: `- github — create an issue (default), or override operation:
-    { kind: "github", owner: "username", repo: "reponame", title: "Bug", content: "Details" }
-    { kind: "github", owner: "...", repo: "...", operation: "get", resource: "repository" }`,
-  clickup: `- clickup — create a task in a ClickUp list:
-    { kind: "clickup", list: "LIST_ID", title: "Task name", content: "Description" }`,
-  trello: `- trello — create a card in a Trello list:
-    { kind: "trello", list: "LIST_ID", title: "Card name", content: "Description" }`,
-  sheets: `- sheets — append a row to a Google Sheet (auto-maps previous step's fields to columns):
-    { kind: "sheets", document: "SPREADSHEET_ID", tab: "Sheet1" }`,
+    { kind: "notion", database: "DATABASE_UUID", title: "Page title", content: "Body" }
+  Required: database [REQ] (32-char UUID from DB URL — DB must be SHARED with the Notion integration via DB → Connections), title [REQ]
+  Optional: content [OPT]`,
+  github: `- github — create an issue (default):
+    { kind: "github", owner: "0J33", repo: "agent.ojee.net", title: "Bug X", content: "Repro..." }
+  Required: owner [REQ], repo [REQ], title [REQ]
+  Optional: content [OPT, becomes issue body], operation [OPT, default "create"], resource [OPT, default "issue"]`,
+  clickup: `- clickup — create a task:
+    { kind: "clickup", list: "LIST_ID", title: "Task name", content: "Description" }
+  Required: list [REQ] (numeric list ID from list URL), title [REQ]
+  Optional: content [OPT, becomes task description]`,
+  trello: `- trello — create a card:
+    { kind: "trello", list: "LIST_ID", title: "Card name", content: "Description" }
+  Required: list [REQ] (Trello list ID), title [REQ]
+  Optional: content [OPT, card description]`,
+  sheets: `- sheets — append a row to a Google Sheet (auto-maps previous step fields to columns):
+    { kind: "sheets", document: "SPREADSHEET_ID", tab: "Sheet1" }
+  Required: document [REQ] (long ID between /d/ and /edit in sheet URL)
+  Optional: tab [OPT, default "Sheet1"], operation [OPT, default "append"]`,
   calendar: `- calendar — create a Google Calendar event:
     { kind: "calendar", start: "2026-04-20T10:00:00Z", end: "2026-04-20T11:00:00Z", title: "Meeting", content: "Agenda" }
-  Omit calendar → uses the user's primary calendar.`,
+  Required: start [REQ] (ISO 8601 datetime), title [REQ]
+  Optional: end [OPT, defaults to start], calendar [OPT, default "primary"], content [OPT, becomes description]`,
   docs: `- docs — create a Google Doc:
-    { kind: "docs", title: "Weekly notes", content: "# Monday...", folder: "FOLDER_ID" (optional) }`,
-  drive: `- drive — create/upload a file in Google Drive:
-    { kind: "drive", title: "report.txt", folder: "FOLDER_ID" (optional) }`,
-  outlook: `- outlook — send an email via Microsoft Outlook:
-    { kind: "outlook", to: "user@example.com", subject: "Subject", body: "<p>HTML body</p>" }`,
+    { kind: "docs", title: "Weekly notes", content: "# Monday..." }
+  Required: title [REQ]   Optional: content [OPT], folder [OPT, default "root"]`,
+  drive: `- drive — create/upload a file:
+    { kind: "drive", title: "report.txt" }
+  Required: title [REQ] (with extension)   Optional: folder [OPT, default "root"]`,
+  outlook: `- outlook — send an email via Outlook:
+    { kind: "outlook", to: "user@example.com", subject: "Subject", body: "<p>HTML body</p>" }
+  Required: to [REQ], subject [REQ], body [REQ]`,
 };
 
 const INTEG_SUMMARY = {
@@ -917,10 +987,22 @@ ${availRecipes || '(No integrations currently configured. Use http/llm/set/email
 
 ### Integration rules
 
-- NEVER use an integration kind that isn't in the "Available right now" list. If the user asks for one that isn't available, say so and offer http as a fallback (e.g. for missing Gmail, use an email step or an http step to an SMTP-ish endpoint).
+- NEVER use an integration kind that isn't in the "Available right now" list. If the user asks for one that isn't available, say so and offer http as a fallback.
 - NEVER put a webhook URL, API key, or bot token in a step's fields. Those live in the credential — the server attaches them automatically.
-- Use n8n expressions to chain steps: {{$json.fieldName}} references the previous step's output. For the weather example, an http step to open-meteo produces {{$json.current.temperature_2m}}.
-- For Discord, prefer "discord" (webhook) unless the user specifically says "via the bot" — webhook is simpler and works with the default credential.
+- NEVER invent a placeholder ID (e.g. "DATABASE_UUID", "LIST_ID", "SPREADSHEET_ID", "0", "abc123"). If the user did NOT give you a real ID for a [REQ] field, ASK before calling the tool.
+- Use n8n expressions to chain steps: {{$json.fieldName}} references the previous step's output. For weather, http to open-meteo produces {{$json.current.temperature_2m}}.
+- For Discord, prefer "discord" (webhook) unless the user specifically says "via the bot".
+
+### Asking for missing info
+
+Before calling n8n_quick_workflow, scan each step against its recipe. If any [REQ] field for an integration step isn't supplied by the user (and you don't have a default), ASK the user one consolidated question listing everything you need:
+
+  "Before I build this, I need: 1) the Notion database ID, 2) the page title — what should I use?"
+
+If you skip the check and call the tool with missing fields, the server returns:
+  { status: "MISSING_INFO", missing: [{stepIndex, kind, field, hint}, ...], message: "..." }
+
+When you receive that, do NOT retry with placeholders. Read the missing list, ask the user for those exact fields in plain words (use the hints), and retry only after they answer.
 
 ### Full worked examples (follow this shape exactly)
 
