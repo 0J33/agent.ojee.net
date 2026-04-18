@@ -22,14 +22,14 @@
   --accent-dim:   rgba(0, 255, 255, 0.16);
   --accent-dark:  #00aaaa;
 
-  /* Semantic states mapped to monochrome:
-     ok/info → cyan, warn → dim cyan, danger → white (high contrast) */
-  --success:      #00ffff;
-  --success-dim:  rgba(0, 255, 255, 0.14);
+  /* Semantic states: green for active/ok, red for down/danger, cyan for info,
+     dim cyan for warn (gauge threshold). */
+  --success:      #00ff88;
+  --success-dim:  rgba(0, 255, 136, 0.14);
   --warn:         #00aaaa;
   --warn-dim:     rgba(0, 170, 170, 0.18);
-  --danger:       #ffffff;
-  --danger-dim:   rgba(255, 255, 255, 0.10);
+  --danger:       #ff4444;
+  --danger-dim:   rgba(255, 68, 68, 0.12);
   --info:         #00ffff;
   --info-dim:     rgba(0, 255, 255, 0.14);
   --user-msg:     rgba(0, 255, 255, 0.06);
@@ -121,8 +121,8 @@ a { color: var(--accent); text-decoration: none; }
 }
 .btn.primary:hover:not(:disabled) { background: var(--accent-bright); border-color: var(--accent-bright); }
 .btn.primary:disabled { background: var(--bg-elev-2); color: var(--text-dim); border-color: var(--border); font-weight: 500; }
-.btn.danger { background: var(--danger-dim); color: var(--danger); border-color: rgba(255, 255, 255, 0.3); }
-.btn.danger:hover:not(:disabled) { background: rgba(255, 255, 255, 0.18); }
+.btn.danger { background: var(--danger-dim); color: var(--danger); border-color: rgba(255, 68, 68, 0.3); }
+.btn.danger:hover:not(:disabled) { background: rgba(255, 68, 68, 0.22); }
 .btn.ghost { background: transparent; border-color: transparent; color: var(--text-muted); }
 .btn.ghost:hover:not(:disabled) { background: var(--bg-elev-2); color: var(--text); }
 .btn-row { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
@@ -202,7 +202,7 @@ a { color: var(--accent); text-decoration: none; }
   padding: 4px 10px;
   border-radius: 999px;
   background: var(--success-dim); color: var(--success);
-  border: 1px solid rgba(0, 255, 255, 0.3);
+  border: 1px solid rgba(0, 255, 136, 0.3);
 }
 .status-pill::before {
   content: ''; width: 6px; height: 6px; border-radius: 50%;
@@ -210,7 +210,7 @@ a { color: var(--accent); text-decoration: none; }
   box-shadow: 0 0 6px currentColor;
   animation: pulse 2s infinite;
 }
-.status-pill.offline { background: var(--danger-dim); color: var(--danger); border-color: rgba(255, 255, 255, 0.3); }
+.status-pill.offline { background: var(--danger-dim); color: var(--danger); border-color: rgba(255, 68, 68, 0.3); }
 .status-pill.offline::before { animation: none; }
 @keyframes pulse {
   0%, 100% { opacity: 1; }
@@ -595,9 +595,9 @@ a { color: var(--accent); text-decoration: none; }
 .chat-send.chat-stop {
   background: var(--danger-dim);
   color: var(--danger);
-  border-color: rgba(255, 255, 255, 0.4);
+  border-color: rgba(255, 68, 68, 0.4);
 }
-.chat-send.chat-stop:hover:not(:disabled) { background: rgba(255, 255, 255, 0.18); }
+.chat-send.chat-stop:hover:not(:disabled) { background: rgba(255, 68, 68, 0.22); }
 
 /* ─── Code agent picker / sessions ─────────────────────────────────────── */
 .ca-path { font-family: var(--font-mono); font-size: 0.72rem; color: var(--text-muted); padding: var(--sp-2) 0; word-break: break-all; }
