@@ -213,7 +213,7 @@ const HISTORY_LEN = 60;
 let state = {
   view: location.hash.replace(/^#\/?/, '') || 'dashboard',  // mobile section
   stats: null, services: null, models: [], pull: [],
-  history: { cpu: [], ram: [], net_in: [], net_out: [], disk_read: [], disk_write: [] },
+  history: { cpu: [], ram: [], swap: [], net_in: [], net_out: [], disk_read: [], disk_write: [] },
   chat: [], chatModel: '', chatBusy: false, chatStatus: null,
   savedChats: [], activeChatId: null, chatDirty: false, showSavedList: false,
   chatJobId: null, chatStartTs: null,
@@ -384,6 +384,32 @@ const sparklineCard = (label, value, values, color) =>
     ${sparkSvg(values, color)}
   ` });
 
+// Dual-line sparkline (e.g. read↑/write↓, in↑/out↓) sharing a common Y axis
+const sparkSvg2 = (vals1, vals2, color1 = 'var(--accent)', color2 = 'var(--accent-dark)') => {
+  const w = 100, h = 32, pad = 2;
+  const all = [...vals1, ...vals2];
+  if (!all.length) return `<svg viewBox="0 0 ${w} ${h}" width="100%" height="${h}"></svg>`;
+  const max = Math.max(...all, 1);
+  const make = (vals) => {
+    if (!vals.length) return '';
+    const step = (w - pad * 2) / Math.max(vals.length - 1, 1);
+    return vals.map((v, i) => `${(pad + i * step).toFixed(2)},${(pad + (h - pad * 2) * (1 - v / max)).toFixed(2)}`).join(' L');
+  };
+  return `<svg viewBox="0 0 ${w} ${h}" width="100%" height="${h}" preserveAspectRatio="none">
+    <path d="M${make(vals1)}" stroke="${color1}" stroke-width="1.5" fill="none" stroke-linejoin="round" stroke-linecap="round"/>
+    <path d="M${make(vals2)}" stroke="${color2}" stroke-width="1.5" fill="none" stroke-linejoin="round" stroke-linecap="round"/>
+  </svg>`;
+};
+const sparklineCard2 = (label, val1, val2, lbl1, lbl2, vals1, vals2, c1 = 'var(--accent)', c2 = 'var(--accent-dark)') =>
+  el('div', { class: 'sparkline-card', html: `
+    <div class="sparkline-card-head"><span>${escapeHtml(label)}</span><span class="sparkline-card-val">${escapeHtml(val1)} / ${escapeHtml(val2)}</span></div>
+    ${sparkSvg2(vals1, vals2, c1, c2)}
+    <div class="spark-legend">
+      <span><span class="dot" style="background:${c1}"></span>${escapeHtml(lbl1)}</span>
+      <span><span class="dot" style="background:${c2}"></span>${escapeHtml(lbl2)}</span>
+    </div>
+  ` });
+
 // ─── Panels ────────────────────────────────────────────────────────────
 const panelSystem = () => {
   const s = state.stats;
@@ -404,36 +430,44 @@ const panelSystem = () => {
 
   const cpuTemp = (s.temps || []).find(t => t.label === 'CPU Package');
   const g = s.gpu;
-  const d = s.disk;
-  const diskIO = (d.read_per_s != null || d.write_per_s != null)
-    ? `↑${fmtBytes(d.write_per_s || 0)}/s ↓${fmtBytes(d.read_per_s || 0)}/s` : null;
-  const netStr = `↑${fmtBytes(s.network.sent_per_s)}/s ↓${fmtBytes(s.network.recv_per_s)}/s`;
+  const truncate = (str, n) => !str ? '' : (str.length <= n ? str : str.slice(0, n - 1) + '…');
+  const cpuShort = truncate(s.cpu.model || '', 24);
+  const gpuShort = g ? truncate(`${g.vendor ? g.vendor + ' ' : ''}${g.model || ''}`, 24) : '';
+
+  const swapPct = s.swap?.total ? Math.round((s.swap.used / s.swap.total) * 100) : 0;
+
+  // Top banner: OS + uptime + hostname
+  const banner = el('div', { class: 'sys-banner' },
+    el('div', { class: 'sys-banner-item' }, ico('power', 14),
+      el('span', { class: 'k' }, 'Up'), el('span', { class: 'v' }, fmtUp(s.uptime))),
+    el('div', { class: 'sys-banner-item' }, ico('cpu', 14),
+      el('span', { class: 'k' }, 'OS'), el('span', { class: 'v' }, s.os || '—')),
+    s.hostname ? el('div', { class: 'sys-banner-item' }, ico('net', 14),
+      el('span', { class: 'k' }, 'Host'), el('span', { class: 'v' }, s.hostname)) : null,
+  );
 
   const gauges = el('div', { class: 'gauge-grid' },
-    gauge('CPU', s.cpu.avg, `${s.cpu.physical}c · ${cpuTemp ? cpuTemp.current + '°C' : ''}`),
+    gauge('CPU', s.cpu.avg, `${cpuShort}${cpuTemp ? ' · ' + cpuTemp.current + '°C' : ''}`),
     gauge('RAM', s.memory.percent, `${fmtBytes(s.memory.used)} / ${fmtBytes(s.memory.total)}`),
     gauge('Disk /', s.disk.percent, `${fmtBytes(s.disk.used)} / ${fmtBytes(s.disk.total)}`),
-    g && g.util != null ? gauge('GPU', g.util, `${g.temp != null ? g.temp + '°C' : ''}${g.vram_mb ? ` · ${(g.vram_mb / 1024).toFixed(1)}G` : ''}`)
-      : (s.home ? gauge('Disk /home', s.home.percent, `${fmtBytes(s.home.used)} / ${fmtBytes(s.home.total)}`) : null),
+    g && g.util != null
+      ? gauge('GPU', g.util, `${gpuShort}${g.temp != null ? ' · ' + g.temp + '°C' : ''}${g.vram_mb ? ' · ' + (g.vram_mb / 1024).toFixed(1) + 'G' : ''}`)
+      : null,
+    s.swap && s.swap.total ? gauge('Swap', swapPct, `${fmtBytes(s.swap.used)} / ${fmtBytes(s.swap.total)}`) : null,
+    s.home ? gauge('Disk /home', s.home.percent, `${fmtBytes(s.home.used)} / ${fmtBytes(s.home.total)}`) : null,
   );
-
-  const cpuVals = state.history.cpu;
-  const ramVals = state.history.ram;
 
   const sparks = el('div', { class: 'sparkline-row' },
-    sparklineCard('CPU 5m', `${s.cpu.avg.toFixed(0)}%`, cpuVals),
-    sparklineCard('RAM 5m', `${s.memory.percent}%`, ramVals),
-  );
-
-  const detail = el('div', { class: 'stat-list' },
-    el('div', { class: 'stat-row' }, el('span', { class: 'stat-label' }, 'Uptime'), el('span', { class: 'stat-val' }, fmtUp(s.uptime))),
-    el('div', { class: 'stat-row' }, el('span', { class: 'stat-label' }, 'OS'), el('span', { class: 'stat-val' }, s.os)),
-    el('div', { class: 'stat-row' }, el('span', { class: 'stat-label' }, 'CPU'), el('span', { class: 'stat-val' }, s.cpu.model)),
-    g ? el('div', { class: 'stat-row' }, el('span', { class: 'stat-label' }, 'GPU'), el('span', { class: 'stat-val' }, `${g.vendor ? g.vendor + ' ' : ''}${g.model}`)) : null,
-    el('div', { class: 'stat-row' }, el('span', { class: 'stat-label' }, 'Swap'), el('span', { class: 'stat-val' }, `${fmtBytes(s.swap.used)} / ${fmtBytes(s.swap.total)}`)),
-    s.home && g && g.util != null ? el('div', { class: 'stat-row' }, el('span', { class: 'stat-label' }, 'Disk /home'), el('span', { class: 'stat-val' }, `${fmtBytes(s.home.used)} / ${fmtBytes(s.home.total)} (${s.home.percent}%)`)) : null,
-    diskIO ? el('div', { class: 'stat-row' }, el('span', { class: 'stat-label' }, 'Disk I/O'), el('span', { class: 'stat-val mono' }, diskIO)) : null,
-    el('div', { class: 'stat-row' }, el('span', { class: 'stat-label' }, 'Network'), el('span', { class: 'stat-val mono' }, netStr)),
+    sparklineCard('CPU 5m', `${s.cpu.avg.toFixed(0)}%`, state.history.cpu),
+    sparklineCard('RAM 5m', `${s.memory.percent}%`, state.history.ram),
+    sparklineCard2('Disk I/O',
+      `↓${fmtBytes(s.disk?.read_per_s || 0)}/s`, `↑${fmtBytes(s.disk?.write_per_s || 0)}/s`,
+      'read', 'write',
+      state.history.disk_read, state.history.disk_write),
+    sparklineCard2('Network',
+      `↓${fmtBytes(s.network?.recv_per_s || 0)}/s`, `↑${fmtBytes(s.network?.sent_per_s || 0)}/s`,
+      'in', 'out',
+      state.history.net_in, state.history.net_out),
   );
 
   return el('div', { class: 'panel', 'data-panel': 'dashboard' },
@@ -441,9 +475,9 @@ const panelSystem = () => {
       el('span', {}, 'System'),
       el('span', { class: 'head-actions' }, ico('cpu', 14)),
     ),
+    banner,
     gauges,
     sparks,
-    detail,
   );
 };
 
@@ -1390,8 +1424,11 @@ const refresh = async () => {
     state.stats = stats;
     pushHistory('cpu', stats.cpu?.avg);
     pushHistory('ram', stats.memory?.percent);
-    pushHistory('net_in', stats.network?.recv_per_s);
-    pushHistory('net_out', stats.network?.sent_per_s);
+    pushHistory('swap', stats.swap?.total ? (stats.swap.used / stats.swap.total) * 100 : 0);
+    pushHistory('net_in', stats.network?.recv_per_s || 0);
+    pushHistory('net_out', stats.network?.sent_per_s || 0);
+    pushHistory('disk_read', stats.disk?.read_per_s || 0);
+    pushHistory('disk_write', stats.disk?.write_per_s || 0);
   }
   if (services) state.services = services;
   if (pull) state.pull = pull.lines;
