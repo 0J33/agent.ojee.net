@@ -225,7 +225,7 @@ let state = {
   toasts: [],
   chatMode: localStorage.getItem('chat_mode') || 'chat',  // 'chat' | 'code' | 'loq'
   loqAgent: {
-    reachable: false, checked: false, controlOnline: false,
+    reachable: false, controlReachable: false, checked: false, controlOnline: false,
     models: [], chatModel: localStorage.getItem('loq_model') || '',
     chat: [], busy: false, status: null, dirty: false,
     jobId: null, startTs: null,
@@ -734,13 +734,13 @@ const chatModesSwitch = () => el('div', { class: 'chat-modes' },
     'Chat'),
   state.codeAgent.enabled ? el('button', { class: 'chat-mode-btn' + (state.chatMode === 'code' ? ' active' : ''), onclick: () => setChatMode('code') },
     'Code') : null,
-  state.loqAgent.reachable ? el('button', { class: 'chat-mode-btn' + (state.chatMode === 'loq' ? ' active' : ''), onclick: () => setChatMode('loq') },
+  (state.loqAgent.reachable || state.loqAgent.controlReachable) ? el('button', { class: 'chat-mode-btn' + (state.chatMode === 'loq' ? ' active' : ''), onclick: () => setChatMode('loq') },
     'Loq') : null,
 );
 
 const panelChat = () => {
   if (state.chatMode === 'code' && state.codeAgent.enabled) return panelChatCode();
-  if (state.chatMode === 'loq' && state.loqAgent.reachable) return panelChatLoq();
+  if (state.chatMode === 'loq' && (state.loqAgent.reachable || state.loqAgent.controlReachable)) return panelChatLoq();
   return panelChatOllama();
 };
 
@@ -1013,6 +1013,22 @@ const reconnectLoqJob = async (jobId) => {
 
 const panelChatLoq = () => {
   const lq = state.loqAgent;
+
+  // Ollama is down but the control service answers: show a "stopped" empty
+  // state with a prominent Start button instead of the normal chat UI.
+  if (!lq.reachable && lq.controlReachable) {
+    return el('div', { class: 'panel chat-panel', 'data-panel': 'chat' },
+      el('div', { class: 'panel-head' }, el('span', {}, 'Loq'), chatModesSwitch()),
+      el('div', { class: 'chat-empty', style: 'gap: 16px' },
+        ico('power', 28),
+        el('div', {}, 'Loq Ollama is stopped'),
+        el('div', { class: 'muted', style: 'font-size: 0.78rem' }, 'Start it to chat with a local model on the laptop.'),
+        el('button', { class: 'btn primary', style: 'margin-top: 8px', onclick: () => loqStartStop('start') },
+          ico('power', 14), ' Start'),
+      ),
+    );
+  }
+
   const lastIdx = lq.chat.length - 1;
   const log = el('div', { class: 'chat-log' });
   if (lq.chat.length === 0) {
@@ -1776,15 +1792,16 @@ const refresh = async () => {
   if (!state.loqAgent.busy) {
     const lq = await api('/api/loq/status');
     if (lq) {
-      const wasReachable = state.loqAgent.reachable;
+      const before = `${state.loqAgent.reachable}|${state.loqAgent.controlReachable}`;
       state.loqAgent.reachable = !!lq.reachable;
+      state.loqAgent.controlReachable = !!lq.controlReachable;
       state.loqAgent.controlOnline = !!lq.daemon;
       state.loqAgent.models = lq.models || [];
-      // Auto-select first model if none chosen
       if (!state.loqAgent.chatModel && state.loqAgent.models.length) {
         state.loqAgent.chatModel = state.loqAgent.models[0].name;
       }
-      if (wasReachable !== state.loqAgent.reachable) needsRender = true;
+      const after = `${state.loqAgent.reachable}|${state.loqAgent.controlReachable}`;
+      if (before !== after) needsRender = true;
     }
   }
   // Always re-render so gauges/sparklines update — DOM rebuild is cheap

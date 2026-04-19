@@ -1542,16 +1542,22 @@ const loqControl = async (path, method = 'POST', body = null) => {
 };
 
 app.get('/api/loq/status', auth, async (req, res) => {
-  const tags = await loqProbe('/api/tags', 1500);
+  // Probe both Ollama and the control service in parallel so the dashboard
+  // can distinguish "loq is off" (neither reachable) from "Ollama stopped
+  // but control is up" (show Start button, panel visible).
+  const [tags, ctl] = await Promise.all([
+    loqProbe('/api/tags', 1500),
+    LOQ_CONTROL ? loqControl('/status', 'GET').catch(() => null) : Promise.resolve(null),
+  ]);
   const reachable = !!tags;
+  const controlReachable = !!(ctl && ctl.ok);
   const models = (tags && tags.models) ? tags.models.map(m => ({ name: m.name, size: m.size })) : [];
-  // Try control service for daemon state (optional)
-  let daemon = null;
-  if (LOQ_CONTROL) {
-    const r = await loqControl('/status', 'GET').catch(() => null);
-    if (r && r.ok) daemon = r.data;
-  }
-  res.json({ reachable, models, daemon, ollama_url: LOQ_OLLAMA, control_url: LOQ_CONTROL || null });
+  res.json({
+    reachable, controlReachable,
+    models,
+    daemon: controlReachable ? ctl.data : null,
+    ollama_url: LOQ_OLLAMA, control_url: LOQ_CONTROL || null,
+  });
 });
 
 app.post('/api/loq/start', auth, async (req, res) => {
