@@ -1344,9 +1344,13 @@ const processChatJob = async (job, model, messages, ollamaUrl = OLLAMA, opts = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model, messages: conv, tools: toolsForTurn, stream: false,
-          // Caller overrides per-route; loq uses 8K to keep 14B in hybrid
-          // GPU/CPU mode, hp uses 16K to hold the full 5K system prompt.
-          options: { num_ctx: numCtx },
+          // Caller overrides per-route. num_gpu=99 forces Ollama to use
+          // partial offload instead of falling back to pure CPU when the
+          // model is slightly too big for VRAM.
+          options: {
+            num_ctx: numCtx,
+            ...(opts.numGpu != null ? { num_gpu: opts.numGpu } : {}),
+          },
         }),
       });
       const data = await r.json();
@@ -1570,7 +1574,9 @@ app.post('/api/loq/chat', auth, async (req, res) => {
   sseWrite(res, { job_id: jobId });
   job.listeners.add(res);
   res.on('close', () => job.listeners.delete(res));
-  processChatJob(job, model, messages, LOQ_OLLAMA, { numCtx: 8192 });
+  // num_gpu: 99 tells Ollama to offload as many layers as fit rather than
+  // falling back to pure CPU when the model is slightly too big for VRAM.
+  processChatJob(job, model, messages, LOQ_OLLAMA, { numCtx: 8192, numGpu: 99 });
 });
 
 // loq jobs share the same chatJobs registry — same reconnect endpoint works
