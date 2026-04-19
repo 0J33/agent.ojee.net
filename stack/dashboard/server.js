@@ -1291,7 +1291,12 @@ Q: "what's 42 squared"
 → "1764" directly, no tool.`;
 };
 
-const processChatJob = async (job, model, messages, ollamaUrl = OLLAMA) => {
+const processChatJob = async (job, model, messages, ollamaUrl = OLLAMA, opts = {}) => {
+  // num_ctx: 16K fits our ~5K system prompt with room for tool results. On
+  // loq's 8GB VRAM, 14B + 16K KV cache forces pure CPU (~1-3 tok/s). 8K
+  // still holds the system prompt + conversation and lets a 14B run hybrid
+  // at 15-25 tok/s.
+  const numCtx = opts.numCtx || 16384;
   const emit = (evt) => {
     job.events.push(evt);
     for (const listener of job.listeners) {
@@ -1339,10 +1344,9 @@ const processChatJob = async (job, model, messages, ollamaUrl = OLLAMA) => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model, messages: conv, tools: toolsForTurn, stream: false,
-          // Our system prompt is ~5k tokens — default 4096 truncates it and
-          // the model silently misses half its instructions. 16K is safe for
-          // every model we use (Qwen 2.5: 32K, Llama 3.1: 128K, Phi-4: 16K).
-          options: { num_ctx: 16384 },
+          // Caller overrides per-route; loq uses 8K to keep 14B in hybrid
+          // GPU/CPU mode, hp uses 16K to hold the full 5K system prompt.
+          options: { num_ctx: numCtx },
         }),
       });
       const data = await r.json();
@@ -1566,7 +1570,7 @@ app.post('/api/loq/chat', auth, async (req, res) => {
   sseWrite(res, { job_id: jobId });
   job.listeners.add(res);
   res.on('close', () => job.listeners.delete(res));
-  processChatJob(job, model, messages, LOQ_OLLAMA);
+  processChatJob(job, model, messages, LOQ_OLLAMA, { numCtx: 8192 });
 });
 
 // loq jobs share the same chatJobs registry — same reconnect endpoint works
