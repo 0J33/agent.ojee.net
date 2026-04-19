@@ -1618,12 +1618,12 @@ app.post('/api/loq/chat', auth, async (req, res) => {
   sseWrite(res, { job_id: jobId });
   job.listeners.add(res);
   res.on('close', () => job.listeners.delete(res));
-  // Loq runs on CPU — tool definitions bloat prompt-eval by minutes.
-  // Don't send tools to Ollama (allowedTools:[]) but keep the system
-  // prompt's tool instructions so the model writes tool calls as text.
-  // The text-based detection in processChatJob catches and executes them.
+  // Loq now runs on GPU (RTX 5060 8GB, CUDA 13, sm_120) — ~40 tok/s gen.
+  // VRAM only fits ~2K context with a 12B model, so keep the prompt tight
+  // and skip tool defs.  Text-based tool detection still catches web_search
+  // calls the model writes inline.
   processChatJob(job, model, messages, LOQ_OLLAMA, {
-    numCtx: 8192, numGpu: 99, timeoutMs: 600_000,
+    numCtx: 2048, numGpu: 99, timeoutMs: 120_000,
     allowedTools: [], maxToolResultLen: 500,
     systemPrompt: `You are an assistant on the user's self-hosted server (agent.ojee.net).
 
