@@ -1337,7 +1337,13 @@ const processChatJob = async (job, model, messages, ollamaUrl = OLLAMA) => {
       const r = await fetch(`${ollamaUrl}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model, messages: conv, tools: toolsForTurn, stream: false }),
+        body: JSON.stringify({
+          model, messages: conv, tools: toolsForTurn, stream: false,
+          // Our system prompt is ~5k tokens — default 4096 truncates it and
+          // the model silently misses half its instructions. 16K is safe for
+          // every model we use (Qwen 2.5: 32K, Llama 3.1: 128K, Phi-4: 16K).
+          options: { num_ctx: 16384 },
+        }),
       });
       const data = await r.json();
       const msg = data.message || {};
