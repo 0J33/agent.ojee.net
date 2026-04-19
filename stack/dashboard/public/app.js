@@ -223,7 +223,13 @@ let state = {
   chatJobId: null, chatStartTs: null,
   actionMsg: '',
   toasts: [],
-  chatMode: localStorage.getItem('chat_mode') || 'chat',  // 'chat' | 'code'
+  chatMode: localStorage.getItem('chat_mode') || 'chat',  // 'chat' | 'code' | 'loq'
+  loqAgent: {
+    reachable: false, checked: false, controlOnline: false,
+    models: [], chatModel: localStorage.getItem('loq_model') || '',
+    chat: [], busy: false, status: null, dirty: false,
+    jobId: null, startTs: null,
+  },
   codeAgent: {
     enabled: false, checked: false,
     sessions: [], active: null, messages: [],
@@ -263,6 +269,33 @@ const restoreChat = () => {
     }
   } catch {}
 };
+const persistLoq = () => {
+  try {
+    localStorage.setItem('loq_state', JSON.stringify({
+      chat: state.loqAgent.chat,
+      chatModel: state.loqAgent.chatModel,
+      busy: state.loqAgent.busy,
+      jobId: state.loqAgent.jobId,
+      startTs: state.loqAgent.startTs || null,
+    }));
+  } catch {}
+};
+const restoreLoq = () => {
+  try {
+    const s = JSON.parse(localStorage.getItem('loq_state'));
+    if (s) {
+      state.loqAgent.chat = s.chat || [];
+      state.loqAgent.chatModel = s.chatModel || state.loqAgent.chatModel;
+      if (s.busy && s.jobId) {
+        state.loqAgent.busy = true;
+        state.loqAgent.jobId = s.jobId;
+        state.loqAgent.startTs = s.startTs || null;
+        state.loqAgent.status = 'reconnecting';
+      }
+    }
+  } catch {}
+};
+
 const persistCode = () => {
   try {
     localStorage.setItem('code_state', JSON.stringify({
@@ -700,10 +733,13 @@ const chatModesSwitch = () => el('div', { class: 'chat-modes' },
     'Chat'),
   state.codeAgent.enabled ? el('button', { class: 'chat-mode-btn' + (state.chatMode === 'code' ? ' active' : ''), onclick: () => setChatMode('code') },
     'Code') : null,
+  state.loqAgent.reachable ? el('button', { class: 'chat-mode-btn' + (state.chatMode === 'loq' ? ' active' : ''), onclick: () => setChatMode('loq') },
+    'Loq') : null,
 );
 
 const panelChat = () => {
   if (state.chatMode === 'code' && state.codeAgent.enabled) return panelChatCode();
+  if (state.chatMode === 'loq' && state.loqAgent.reachable) return panelChatLoq();
   return panelChatOllama();
 };
 
@@ -866,6 +902,205 @@ const panelChatOllama = () => {
           disabled: !state.chatModel,
           title: state.chatBusy ? 'Stop' : 'Send',
         }, state.chatBusy ? ico('stop', 14) : ico('send', 14)),
+      ),
+    ),
+  );
+};
+
+// ─── Loq Ollama (second local model on the laptop) ─────────────────────
+const loqStartStop = async (action) => {
+  const r = await fetch(`/api/loq/${action}`, { method: 'POST', headers: headers() });
+  let data; try { data = await r.json(); } catch { data = {}; }
+  toast(`Loq ${action}: ${r.ok ? (data.message || 'OK') : (data.error || 'failed')}`, r.ok ? 'success' : 'danger', 5000);
+  // Refresh status soon after
+  setTimeout(refresh, 1500);
+};
+
+const reconnectLoqJob = async (jobId) => {
+  const lastIdx = state.loqAgent.chat.length - 1;
+  const lastMsg = state.loqAgent.chat[lastIdx];
+  const snapshot = lastMsg && lastMsg.role === 'assistant'
+    ? { content: lastMsg.content || '', tools: (lastMsg.tools || []).slice() } : null;
+  try {
+    const r = await fetch(`/api/loq/jobs/${jobId}`, { headers: headers() });
+    if (!r.ok) {
+      state.loqAgent.busy = false; state.loqAgent.status = null;
+      state.loqAgent.jobId = null; state.loqAgent.startTs = null;
+      const last = state.loqAgent.chat[state.loqAgent.chat.length - 1];
+      if (last?.role === 'assistant' && !last.content && snapshot?.content) last.content = snapshot.content;
+      if (last?.role === 'assistant' && !last.content) last.content = '*(session expired)*';
+      persistLoq(); render(); return;
+    }
+    if (lastMsg && lastMsg.role === 'assistant') { lastMsg.content = ''; lastMsg.tools = []; }
+    render();
+    const reader = r.body.getReader(); const dec = new TextDecoder();
+    let buf = ''; let gotAny = false;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split('\n'); buf = lines.pop() || '';
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const p = line.slice(6); if (p === '[DONE]') continue;
+        try {
+          const j = JSON.parse(p); gotAny = true;
+          if (j.message?.content) {
+            state.loqAgent.status = 'typing';
+            state.loqAgent.chat[state.loqAgent.chat.length - 1].content += j.message.content;
+            render();
+          } else if (j.tool_call) {
+            state.loqAgent.status = j.tool_call.name.replace(/^(get|list|read|web)_/, '');
+            const last = state.loqAgent.chat[state.loqAgent.chat.length - 1];
+            if (!last.tools) last.tools = [];
+            if (!last.tools.includes(j.tool_call.name)) last.tools.push(j.tool_call.name);
+            render();
+          } else if (j.tool_result) { state.loqAgent.status = 'thinking'; render(); }
+        } catch {}
+      }
+    }
+    const last = state.loqAgent.chat[state.loqAgent.chat.length - 1];
+    if (last?.role === 'assistant' && !last.content && snapshot?.content) {
+      last.content = snapshot.content; last.tools = snapshot.tools;
+    }
+  } catch {}
+  const last = state.loqAgent.chat[state.loqAgent.chat.length - 1];
+  if (last?.role === 'assistant') {
+    last.ts = Date.now();
+    last.elapsed_ms = state.loqAgent.startTs ? Date.now() - state.loqAgent.startTs : null;
+    if (!last.content && snapshot?.content) { last.content = snapshot.content; last.tools = snapshot.tools; }
+  }
+  state.loqAgent.jobId = null; state.loqAgent.busy = false;
+  state.loqAgent.status = null; state.loqAgent.startTs = null;
+  persistLoq(); render();
+};
+
+const panelChatLoq = () => {
+  const lq = state.loqAgent;
+  const lastIdx = lq.chat.length - 1;
+  const log = el('div', { class: 'chat-log' });
+  if (lq.chat.length === 0) {
+    log.appendChild(el('div', { class: 'chat-empty' },
+      ico('message', 28),
+      el('div', {}, lq.chatModel ? `Loq · ${lq.chatModel}` : 'Pick a model below'),
+    ));
+  } else {
+    lq.chat.forEach((m, i) => log.appendChild(renderChatMsg(m, {
+      isLast: i === lastIdx, busy: lq.busy, busyStatus: lq.status, busyStart: lq.startTs,
+    })));
+  }
+
+  const input = el('textarea', {
+    class: 'chat-input', rows: '1',
+    placeholder: lq.chatModel ? 'Message Loq…' : 'Pull a model on Loq first',
+  });
+  input.value = localStorage.getItem('draft_loq') || '';
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+  });
+  input.addEventListener('input', () => {
+    localStorage.setItem('draft_loq', input.value);
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+  });
+
+  const send = async () => {
+    const text = input.value.trim();
+    if (!text || lq.busy || !lq.chatModel) return;
+    const now = Date.now();
+    lq.chat.push({ role: 'user', content: text, ts: now });
+    lq.chat.push({ role: 'assistant', content: '', model: lq.chatModel, tools: [], ts: null, elapsed_ms: null });
+    lq.busy = true; lq.status = 'thinking';
+    lq.dirty = true; lq.startTs = now;
+    input.value = ''; localStorage.removeItem('draft_loq');
+    persistLoq(); render();
+    try {
+      const r = await fetch('/api/loq/chat', {
+        method: 'POST',
+        headers: { ...headers(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: lq.chatModel,
+          messages: lq.chat.slice(0, -1).map(m => ({ role: m.role, content: m.content })),
+        }),
+      });
+      const reader = r.body.getReader(); const dec = new TextDecoder();
+      let buf = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const lines = buf.split('\n'); buf = lines.pop() || '';
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const p = line.slice(6); if (p === '[DONE]') continue;
+          try {
+            const j = JSON.parse(p);
+            if (j.job_id) { lq.jobId = j.job_id; persistLoq(); }
+            else if (j.message?.content) {
+              if (lq.status !== 'typing') lq.status = 'typing';
+              lq.chat[lq.chat.length - 1].content += j.message.content;
+              render();
+            } else if (j.tool_call) {
+              lq.status = j.tool_call.name.replace(/^(get|list|read|web)_/, '');
+              const last = lq.chat[lq.chat.length - 1];
+              if (!last.tools) last.tools = [];
+              if (!last.tools.includes(j.tool_call.name)) last.tools.push(j.tool_call.name);
+              render();
+            } else if (j.tool_result) { lq.status = 'thinking'; render(); }
+          } catch {}
+        }
+      }
+    } catch (e) {
+      if (lq.jobId) {
+        lq.status = 'reconnecting'; persistLoq(); render();
+        reconnectLoqJob(lq.jobId);
+        return;
+      }
+      lq.chat[lq.chat.length - 1].content = `Error: ${e.message}`;
+    }
+    const last = lq.chat[lq.chat.length - 1];
+    if (last?.role === 'assistant') {
+      last.ts = Date.now();
+      last.elapsed_ms = lq.startTs ? Date.now() - lq.startTs : null;
+    }
+    lq.jobId = null; lq.busy = false;
+    lq.status = null; lq.startTs = null;
+    persistLoq(); render();
+  };
+
+  const modelSel = el('select', { class: 'chat-select',
+    onchange: (e) => { lq.chatModel = e.target.value; localStorage.setItem('loq_model', e.target.value); render(); } },
+    ...(lq.models.length ? lq.models : [{ name: 'no models on loq' }]).map(m =>
+      el('option', { value: m.name, ...(m.name === lq.chatModel ? { selected: true } : {}) }, m.name),
+    ),
+  );
+
+  const toolbar = el('div', { class: 'chat-toolbar' },
+    modelSel,
+    el('button', { class: 'btn sm', title: 'Start Ollama on loq', onclick: () => loqStartStop('start') },
+      ico('power', 14), ' Start'),
+    el('button', { class: 'btn sm danger', title: 'Stop Ollama on loq (frees VRAM)', onclick: () => loqStartStop('stop') },
+      ico('stop', 14), ' Stop'),
+    el('button', { class: 'btn sm', onclick: () => { lq.chat = []; lq.dirty = false; lq.jobId = null; lq.startTs = null; persistLoq(); render(); }, title: 'Clear chat' },
+      ico('plus', 14)),
+  );
+
+  return el('div', { class: 'panel chat-panel', 'data-panel': 'chat' },
+    el('div', { class: 'panel-head' },
+      el('span', {}, 'Loq'),
+      chatModesSwitch(),
+    ),
+    toolbar,
+    el('div', { class: 'chat-wrap' },
+      log,
+      el('div', { class: 'chat-form' },
+        input,
+        el('button', {
+          class: 'btn primary chat-send' + (lq.busy ? ' chat-stop' : ''),
+          onclick: lq.busy ? () => {} : send,
+          disabled: !lq.chatModel,
+          title: lq.busy ? 'Stop' : 'Send',
+        }, lq.busy ? ico('stop', 14) : ico('send', 14)),
       ),
     ),
   );
@@ -1338,7 +1573,7 @@ const render = () => {
   }
   if (pageY) window.scrollTo(0, pageY);
 
-  if ((state.chatBusy && state.chatStartTs) || (state.codeAgent.busy && state.codeAgent.startTs)) startLiveTimer();
+  if ((state.chatBusy && state.chatStartTs) || (state.codeAgent.busy && state.codeAgent.startTs) || (state.loqAgent.busy && state.loqAgent.startTs)) startLiveTimer();
 };
 
 // ─── Reconnect chat job ────────────────────────────────────────────────
@@ -1479,6 +1714,21 @@ const refresh = async () => {
     const s = await api('/api/code-agent/sessions');
     if (s?.active) state.codeAgent.sessions = s.active;
   }
+  // Probe loq laptop's Ollama (cheap, ~1.5s timeout server-side)
+  if (!state.loqAgent.busy) {
+    const lq = await api('/api/loq/status');
+    if (lq) {
+      const wasReachable = state.loqAgent.reachable;
+      state.loqAgent.reachable = !!lq.reachable;
+      state.loqAgent.controlOnline = !!lq.daemon;
+      state.loqAgent.models = lq.models || [];
+      // Auto-select first model if none chosen
+      if (!state.loqAgent.chatModel && state.loqAgent.models.length) {
+        state.loqAgent.chatModel = state.loqAgent.models[0].name;
+      }
+      if (wasReachable !== state.loqAgent.reachable) needsRender = true;
+    }
+  }
   // Always re-render so gauges/sparklines update — DOM rebuild is cheap
   render();
 };
@@ -1487,6 +1737,7 @@ const refresh = async () => {
 const boot = async () => {
   restoreChat();
   restoreCode();
+  restoreLoq();
   await loadSavedChats();
   render();
   refresh();
@@ -1500,12 +1751,20 @@ const boot = async () => {
     state.chatStatus = 'reconnecting'; render();
     reconnectChatJob(state.chatJobId);
   }
+  if (state.loqAgent.busy && state.loqAgent.jobId) {
+    state.loqAgent.status = 'reconnecting'; render();
+    reconnectLoqJob(state.loqAgent.jobId);
+  }
 
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState !== 'visible') return;
     if (state.chatBusy && state.chatJobId) {
       state.chatStatus = 'reconnecting'; render();
       reconnectChatJob(state.chatJobId);
+    }
+    if (state.loqAgent.busy && state.loqAgent.jobId) {
+      state.loqAgent.status = 'reconnecting'; render();
+      reconnectLoqJob(state.loqAgent.jobId);
     }
     if (state.codeAgent.busy && state.codeAgent.active) {
       state.codeAgent.status = 'reconnecting'; render();

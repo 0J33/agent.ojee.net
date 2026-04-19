@@ -10,6 +10,12 @@ const PORT = process.env.PORT || 8080;
 const PASSWORD = process.env.DASHBOARD_PASSWORD || 'change-me';
 const JWT_SECRET = process.env.JWT_SECRET || require('crypto').randomBytes(32).toString('hex');
 const OLLAMA = process.env.OLLAMA_BASE_URL || 'http://host.docker.internal:11434';
+// Loq laptop: optional second Ollama instance + a small control HTTP API for
+// start/stop. Both default to common tailnet addresses; either can be empty
+// to disable the feature.
+const LOQ_OLLAMA = process.env.LOQ_OLLAMA_URL || 'http://100.81.241.55:11434';
+const LOQ_CONTROL = process.env.LOQ_CONTROL_URL || 'http://100.81.241.55:7779';
+const LOQ_CONTROL_TOKEN = process.env.LOQ_CONTROL_TOKEN || '';
 const N8N_BASE = process.env.N8N_BASE_URL || 'http://n8n:5678';
 const N8N_API_KEY = process.env.N8N_API_KEY || '';
 const CODE_AGENT_URL = process.env.CODE_AGENT_URL || '';
@@ -1285,7 +1291,7 @@ Q: "what's 42 squared"
 → "1764" directly, no tool.`;
 };
 
-const processChatJob = async (job, model, messages) => {
+const processChatJob = async (job, model, messages, ollamaUrl = OLLAMA) => {
   const emit = (evt) => {
     job.events.push(evt);
     for (const listener of job.listeners) {
@@ -1328,7 +1334,7 @@ const processChatJob = async (job, model, messages) => {
   try {
     for (let i = 0; i < MAX_ITER; i++) {
       const toolsForTurn = pickTools();
-      const r = await fetch(`${OLLAMA}/api/chat`, {
+      const r = await fetch(`${ollamaUrl}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model, messages: conv, tools: toolsForTurn, stream: false }),
@@ -1475,6 +1481,90 @@ app.post('/api/chat', auth, async (req, res) => {
 
 // Reconnect to a running (or recently finished) chat job
 app.get('/api/chat/jobs/:id', auth, (req, res) => {
+  const job = chatJobs.get(req.params.id);
+  if (!job) return res.status(404).json({ error: 'job not found' });
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  for (const evt of job.events) sseWrite(res, evt);
+  if (job.done) { res.write('data: [DONE]\n\n'); return res.end(); }
+  job.listeners.add(res);
+  res.on('close', () => job.listeners.delete(res));
+});
+
+// ─── Loq laptop chat (second Ollama on tailnet) ──────────────────────────
+// Same chat machinery + same tools + same system prompt, but the upstream
+// is the loq laptop's Ollama. Status probes confirm reachability before the
+// UI shows the "Loq" mode toggle. start/stop call a tiny control service
+// that lives on loq (LOQ_CONTROL_URL).
+const loqProbe = async (path = '/api/tags', timeoutMs = 2000) => {
+  if (!LOQ_OLLAMA) return null;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const r = await fetch(`${LOQ_OLLAMA}${path}`, { signal: ctrl.signal });
+    clearTimeout(timer);
+    if (!r.ok) return null;
+    return await r.json();
+  } catch { clearTimeout(timer); return null; }
+};
+const loqControl = async (path, method = 'POST', body = null) => {
+  if (!LOQ_CONTROL) throw new Error('LOQ_CONTROL_URL not configured');
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 30000);
+  try {
+    const r = await fetch(`${LOQ_CONTROL}${path}`, {
+      method, signal: ctrl.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(LOQ_CONTROL_TOKEN ? { Authorization: `Bearer ${LOQ_CONTROL_TOKEN}` } : {}),
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    clearTimeout(timer);
+    let data; try { data = await r.json(); } catch { data = { ok: r.ok }; }
+    return { status: r.status, ok: r.ok, data };
+  } catch (e) { clearTimeout(timer); return { status: 0, ok: false, data: { error: String(e.message || e) } }; }
+};
+
+app.get('/api/loq/status', auth, async (req, res) => {
+  const tags = await loqProbe('/api/tags', 1500);
+  const reachable = !!tags;
+  const models = (tags && tags.models) ? tags.models.map(m => ({ name: m.name, size: m.size })) : [];
+  // Try control service for daemon state (optional)
+  let daemon = null;
+  if (LOQ_CONTROL) {
+    const r = await loqControl('/status', 'GET').catch(() => null);
+    if (r && r.ok) daemon = r.data;
+  }
+  res.json({ reachable, models, daemon, ollama_url: LOQ_OLLAMA, control_url: LOQ_CONTROL || null });
+});
+
+app.post('/api/loq/start', auth, async (req, res) => {
+  const r = await loqControl('/start', 'POST');
+  res.status(r.ok ? 200 : 502).json(r.data);
+});
+app.post('/api/loq/stop', auth, async (req, res) => {
+  const r = await loqControl('/stop', 'POST');
+  res.status(r.ok ? 200 : 502).json(r.data);
+});
+
+app.post('/api/loq/chat', auth, async (req, res) => {
+  const { model, messages } = req.body;
+  const jobId = require('crypto').randomBytes(8).toString('hex');
+  const job = { id: jobId, events: [], done: false, doneAt: null, listeners: new Set() };
+  chatJobs.set(jobId, job);
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  sseWrite(res, { job_id: jobId });
+  job.listeners.add(res);
+  res.on('close', () => job.listeners.delete(res));
+  processChatJob(job, model, messages, LOQ_OLLAMA);
+});
+
+// loq jobs share the same chatJobs registry — same reconnect endpoint works
+app.get('/api/loq/jobs/:id', auth, (req, res) => {
   const job = chatJobs.get(req.params.id);
   if (!job) return res.status(404).json({ error: 'job not found' });
   res.setHeader('Content-Type', 'text/event-stream');
