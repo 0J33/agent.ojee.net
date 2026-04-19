@@ -1292,10 +1292,11 @@ Q: "what's 42 squared"
 };
 
 const processChatJob = async (job, model, messages, ollamaUrl = OLLAMA, opts = {}) => {
-  // num_ctx: 16K fits our ~5K system prompt with room for tool results. On
-  // loq's 8GB VRAM, 14B + 16K KV cache forces pure CPU (~1-3 tok/s). 8K
-  // still holds the system prompt + conversation and lets a 14B run hybrid
-  // at 15-25 tok/s.
+  // opts.systemPrompt — override the default ~5K-token system prompt.
+  // opts.noTools       — skip tool injection and text-based tool detection.
+  // Loq runs on CPU (GPU isn't accessible to Ollama).  The full system
+  // prompt takes ~40 min of prompt-eval on CPU, so Loq passes a tiny
+  // prompt and noTools:true for fast responses.
   const numCtx = opts.numCtx || 16384;
   const emit = (evt) => {
     job.events.push(evt);
@@ -1317,7 +1318,10 @@ const processChatJob = async (job, model, messages, ollamaUrl = OLLAMA, opts = {
     job.doneAt = Date.now();
     job.listeners.clear();
   };
-  const conv = [{ role: 'system', content: await buildSystemPrompt() }, ...messages];
+  const sysContent = opts.systemPrompt != null ? opts.systemPrompt : await buildSystemPrompt();
+  const conv = sysContent
+    ? [{ role: 'system', content: sysContent }, ...messages]
+    : [...messages];
   // Select the tool set based on the latest user turn. Small models misfire on
   // short/greeting prompts (e.g. "hello" triggers n8n_quick_workflow just
   // because it appears in an example). Filter tools so the model physically
@@ -1332,32 +1336,63 @@ const processChatJob = async (job, model, messages, ollamaUrl = OLLAMA, opts = {
   const allText = messages.map(m => m.content || '').join(' ');
   const wantsN8n = n8nRe.test(lastUser) || n8nActionRe.test(lastUser) || n8nRe.test(allText);
   const pickTools = () => {
+    if (opts.noTools) return [];
     if (isGreeting) return [];
     return wantsN8n ? TOOLS : TOOLS.filter(t => !t.function.name.startsWith('n8n_'));
   };
   const MAX_ITER = 6;
+  const OLLAMA_TIMEOUT = opts.timeoutMs || 180_000; // 3 min per Ollama turn
   try {
     for (let i = 0; i < MAX_ITER; i++) {
       const toolsForTurn = pickTools();
-      const r = await fetch(`${ollamaUrl}/api/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model, messages: conv, tools: toolsForTurn, stream: false,
-          // Caller overrides per-route. num_gpu=99 forces Ollama to use
-          // partial offload instead of falling back to pure CPU when the
-          // model is slightly too big for VRAM.
-          options: {
-            num_ctx: numCtx,
-            ...(opts.numGpu != null ? { num_gpu: opts.numGpu } : {}),
-          },
-        }),
-      });
-      const data = await r.json();
-      const msg = data.message || {};
-      let toolCalls = msg.tool_calls || [];
-      let textOut = msg.content || '';
-      if (!toolCalls.length && textOut) {
+      const ac = AbortController && new AbortController();
+      const timer = ac && setTimeout(() => ac.abort(), OLLAMA_TIMEOUT);
+      let textOut = '';
+      let toolCalls = [];
+      try {
+        const r = await fetch(`${ollamaUrl}/api/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model, messages: conv, tools: toolsForTurn, stream: true,
+            options: {
+              num_ctx: numCtx,
+              ...(opts.numGpu != null ? { num_gpu: opts.numGpu } : {}),
+            },
+          }),
+          ...(ac ? { signal: ac.signal } : {}),
+        });
+        // Parse Ollama NDJSON stream — emit content in real-time so the user
+        // sees tokens as they arrive instead of waiting for the full response.
+        let buf = '';
+        for await (const chunk of r.body) {
+          buf += chunk.toString();
+          const lines = buf.split('\n');
+          buf = lines.pop() || '';
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            try {
+              const d = JSON.parse(line);
+              if (d.message?.content) {
+                emit({ message: { content: d.message.content } });
+                textOut += d.message.content;
+              }
+              if (d.message?.tool_calls?.length) toolCalls = d.message.tool_calls;
+            } catch {}
+          }
+        }
+        if (buf.trim()) {
+          try {
+            const d = JSON.parse(buf);
+            if (d.message?.content) {
+              emit({ message: { content: d.message.content } });
+              textOut += d.message.content;
+            }
+            if (d.message?.tool_calls?.length) toolCalls = d.message.tool_calls;
+          } catch {}
+        }
+      } finally { clearTimeout(timer); }
+      if (!opts.noTools && !toolCalls.length && textOut) {
         const toolNames = TOOLS.map(t => t.function.name);
         // Repair common JSON issues from model output
         const repairJson = (s) => {
@@ -1452,9 +1487,9 @@ const processChatJob = async (job, model, messages, ollamaUrl = OLLAMA, opts = {
           }
         }
       }
-      if (toolCalls.length) textOut = '';
-      conv.push({ role: 'assistant', content: textOut, tool_calls: toolCalls.length ? toolCalls : undefined });
-      if (textOut) emit({ message: { content: textOut } });
+      const convText = toolCalls.length ? '' : textOut;
+      conv.push({ role: 'assistant', content: convText, tool_calls: toolCalls.length ? toolCalls : undefined });
+      // Content already emitted token-by-token during streaming
       if (!toolCalls.length) { finish(); return; }
       for (const tc of toolCalls) {
         const name = tc.function?.name;
@@ -1580,9 +1615,12 @@ app.post('/api/loq/chat', auth, async (req, res) => {
   sseWrite(res, { job_id: jobId });
   job.listeners.add(res);
   res.on('close', () => job.listeners.delete(res));
-  // num_gpu: 99 tells Ollama to offload as many layers as fit rather than
-  // falling back to pure CPU when the model is slightly too big for VRAM.
-  processChatJob(job, model, messages, LOQ_OLLAMA, { numCtx: 8192, numGpu: 99 });
+  // Loq runs on CPU — the full ~5K-token system prompt takes minutes to eval.
+  // Use a tiny prompt and skip tools so responses arrive in seconds.
+  processChatJob(job, model, messages, LOQ_OLLAMA, {
+    numCtx: 8192, numGpu: 99, noTools: true,
+    systemPrompt: 'You are a helpful assistant. Keep replies concise.',
+  });
 });
 
 // loq jobs share the same chatJobs registry — same reconnect endpoint works

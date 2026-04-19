@@ -635,6 +635,7 @@ const loadChat = async (id) => {
   state.chatModel = c.model || state.chatModel;
   state.chatDirty = false;
   state.showSavedList = false;
+  state.chatBusy = false; state.chatStatus = null; state.chatJobId = null; state.chatStartTs = null;
   persistChat(); render();
 };
 const deleteChat = async (id, e) => {
@@ -941,6 +942,7 @@ const loqLoadChat = async (id) => {
   // Only switch to the saved model if loq actually has it
   if (c.model && lq.models.some(m => m.name === c.model)) lq.chatModel = c.model;
   lq.dirty = false; lq.showSavedList = false;
+  lq.busy = false; lq.status = null; lq.jobId = null; lq.startTs = null;
   persistLoq(); render();
 };
 
