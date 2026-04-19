@@ -229,6 +229,7 @@ let state = {
     models: [], chatModel: localStorage.getItem('loq_model') || '',
     chat: [], busy: false, status: null, dirty: false,
     jobId: null, startTs: null,
+    activeChatId: null, showSavedList: false,
   },
   codeAgent: {
     enabled: false, checked: false,
@@ -908,6 +909,41 @@ const panelChatOllama = () => {
 };
 
 // ─── Loq Ollama (second local model on the laptop) ─────────────────────
+// Saved-chat helpers for loq mode — reuse the same /api/chats backend so
+// chats are unified across modes, but operate on state.loqAgent state.
+const loqNewChat = () => {
+  const lq = state.loqAgent;
+  lq.chat = []; lq.activeChatId = null; lq.dirty = false;
+  lq.status = null; lq.jobId = null; lq.startTs = null;
+  persistLoq(); render();
+};
+const loqSaveChat = async () => {
+  const lq = state.loqAgent;
+  if (!lq.chat.length) return;
+  const id = lq.activeChatId || randId();
+  const firstUser = lq.chat.find(m => m.role === 'user');
+  const title = (firstUser?.content || 'Chat').slice(0, 80);
+  await api(`/api/chats/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify({ title, model: lq.chatModel, messages: lq.chat }),
+  });
+  lq.activeChatId = id; lq.dirty = false;
+  await loadSavedChats();
+  persistLoq(); render();
+};
+const loqLoadChat = async (id) => {
+  const lq = state.loqAgent;
+  if (lq.dirty && !lq.activeChatId && !confirm('Discard unsaved chat?')) return;
+  const c = await api(`/api/chats/${id}`);
+  if (!c) return;
+  lq.chat = c.messages || [];
+  lq.activeChatId = c.id;
+  // Only switch to the saved model if loq actually has it
+  if (c.model && lq.models.some(m => m.name === c.model)) lq.chatModel = c.model;
+  lq.dirty = false; lq.showSavedList = false;
+  persistLoq(); render();
+};
+
 const loqStartStop = async (action) => {
   const r = await fetch(`/api/loq/${action}`, { method: 'POST', headers: headers() });
   let data; try { data = await r.json(); } catch { data = {}; }
@@ -1050,6 +1086,7 @@ const panelChatLoq = () => {
           } catch {}
         }
       }
+      if (lq.activeChatId) loqSaveChat().catch(() => {});
     } catch (e) {
       if (lq.jobId) {
         lq.status = 'reconnecting'; persistLoq(); render();
@@ -1077,13 +1114,32 @@ const panelChatLoq = () => {
 
   const toolbar = el('div', { class: 'chat-toolbar' },
     modelSel,
-    el('button', { class: 'btn sm', title: 'Start Ollama on loq', onclick: () => loqStartStop('start') },
-      ico('power', 14), ' Start'),
-    el('button', { class: 'btn sm danger', title: 'Stop Ollama on loq (frees VRAM)', onclick: () => loqStartStop('stop') },
-      ico('stop', 14), ' Stop'),
-    el('button', { class: 'btn sm', onclick: () => { lq.chat = []; lq.dirty = false; lq.jobId = null; lq.startTs = null; persistLoq(); render(); }, title: 'Clear chat' },
-      ico('plus', 14)),
+    el('button', { class: 'btn sm', onclick: loqNewChat, title: 'New chat' }, ico('plus', 14)),
+    el('button', { class: 'btn sm', onclick: loqSaveChat, title: 'Save chat', disabled: lq.chat.length === 0 }, 'Save'),
+    el('button', { class: 'btn sm', onclick: () => { lq.showSavedList = !lq.showSavedList; render(); }, title: 'Browse saved' }, `${lq.showSavedList ? 'Hide' : 'Saved'} (${state.savedChats.length})`),
+    el('button', { class: 'btn sm', title: 'Start Ollama on loq', onclick: () => loqStartStop('start') }, ico('power', 14), ' Start'),
+    el('button', { class: 'btn sm danger', title: 'Stop Ollama on loq (frees VRAM)', onclick: () => loqStartStop('stop') }, ico('stop', 14), ' Stop'),
   );
+
+  const savedList = lq.showSavedList
+    ? el('div', { class: 'saved-list' },
+        state.savedChats.length === 0
+          ? el('div', { class: 'muted', style: 'padding:10px;text-align:center;font-size:0.78rem' }, 'no saved chats')
+          : state.savedChats.map(c =>
+              el('div', { class: 'saved-item' + (c.id === lq.activeChatId ? ' active' : ''), onclick: () => loqLoadChat(c.id) },
+                el('div', { class: 'saved-title' }, c.title),
+                el('div', { class: 'saved-actions' },
+                  el('button', { class: 'btn ghost icon', onclick: (e) => renameChat(c.id, e), title: 'Rename' }, ico('pencil', 12)),
+                  el('button', { class: 'btn ghost icon danger', onclick: (e) => deleteChat(c.id, e), title: 'Delete' }, ico('trash', 12)),
+                ),
+              ),
+            ),
+      )
+    : null;
+
+  const activeBadge = lq.activeChatId
+    ? el('div', { class: 'chat-active-badge' }, `editing: ${(state.savedChats.find(c => c.id === lq.activeChatId) || {}).title || '—'}`)
+    : null;
 
   return el('div', { class: 'panel chat-panel', 'data-panel': 'chat' },
     el('div', { class: 'panel-head' },
@@ -1091,6 +1147,8 @@ const panelChatLoq = () => {
       chatModesSwitch(),
     ),
     toolbar,
+    savedList,
+    activeBadge,
     el('div', { class: 'chat-wrap' },
       log,
       el('div', { class: 'chat-form' },
