@@ -1396,7 +1396,13 @@ const processChatJob = async (job, model, messages, ollamaUrl = OLLAMA, opts = {
         }
       } finally { clearTimeout(timer); }
       if (!opts.noTools && !toolCalls.length && textOut) {
-        const toolNames = TOOLS.map(t => t.function.name);
+        // Limit the text-based detector to a whitelist when provided.
+        // Without this, a small model that hallucinates an n8n_* call
+        // would trigger silent server-side execution even when the
+        // system prompt never taught it those tools.
+        const toolNames = opts.textToolAllow
+          ? opts.textToolAllow
+          : TOOLS.map(t => t.function.name);
         // Repair common JSON issues from model output
         const repairJson = (s) => {
           s = s.replace(/:\s*([A-Z_][A-Z0-9_]{2,})\s*([,}\]])/gi, ':"$1"$2'); // unquoted values
@@ -1630,6 +1636,7 @@ app.post('/api/loq/chat', auth, async (req, res) => {
   processChatJob(job, model, messages, LOQ_OLLAMA, {
     numCtx: 2048, numGpu: 99, numBatch: 128, timeoutMs: 120_000,
     allowedTools: [], maxToolResultLen: 3000,
+    textToolAllow: ['web_search', 'web_fetch', 'get_stats', 'get_services', 'list_models', 'list_dir', 'read_file'],
     systemPrompt: `You are an assistant on the user's self-hosted server (agent.ojee.net).
 
 ### HARD RULES

@@ -1073,6 +1073,7 @@ const panelChatLoq = () => {
     lq.busy = true; lq.status = 'thinking';
     lq.dirty = true; lq.startTs = now;
     input.value = ''; localStorage.removeItem('draft_loq');
+    lq.abort = new AbortController();
     persistLoq(); render();
     try {
       const r = await fetch('/api/loq/chat', {
@@ -1082,6 +1083,7 @@ const panelChatLoq = () => {
           model: lq.chatModel,
           messages: lq.chat.slice(0, -1).map(m => ({ role: m.role, content: m.content })),
         }),
+        signal: lq.abort.signal,
       });
       const reader = r.body.getReader(); const dec = new TextDecoder();
       let buf = '';
@@ -1115,12 +1117,17 @@ const panelChatLoq = () => {
       }
       if (lq.activeChatId) loqSaveChat().catch(() => {});
     } catch (e) {
-      if (lq.jobId) {
+      if (e.name === 'AbortError') {
+        // user-initiated stop — keep whatever content streamed so far
+        const last = lq.chat[lq.chat.length - 1];
+        if (last?.role === 'assistant' && !last.content) last.content = '*(stopped)*';
+      } else if (lq.jobId) {
         lq.status = 'reconnecting'; persistLoq(); render();
         reconnectLoqJob(lq.jobId);
         return;
+      } else {
+        lq.chat[lq.chat.length - 1].content = `Error: ${e.message}`;
       }
-      lq.chat[lq.chat.length - 1].content = `Error: ${e.message}`;
     }
     const last = lq.chat[lq.chat.length - 1];
     if (last?.role === 'assistant') {
@@ -1182,7 +1189,7 @@ const panelChatLoq = () => {
         input,
         el('button', {
           class: 'btn primary chat-send' + (lq.busy ? ' chat-stop' : ''),
-          onclick: lq.busy ? () => {} : send,
+          onclick: lq.busy ? () => lq.abort?.abort() : send,
           disabled: !lq.chatModel,
           title: lq.busy ? 'Stop' : 'Send',
         }, lq.busy ? ico('stop', 14) : ico('send', 14)),
