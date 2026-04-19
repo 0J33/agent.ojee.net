@@ -1360,6 +1360,7 @@ const processChatJob = async (job, model, messages, ollamaUrl = OLLAMA, opts = {
             options: {
               num_ctx: numCtx,
               ...(opts.numGpu != null ? { num_gpu: opts.numGpu } : {}),
+              ...(opts.numBatch != null ? { num_batch: opts.numBatch } : {}),
             },
           }),
           ...(ac ? { signal: ac.signal } : {}),
@@ -1627,7 +1628,7 @@ app.post('/api/loq/chat', auth, async (req, res) => {
   // and skip tool defs.  Text-based tool detection still catches web_search
   // calls the model writes inline.
   processChatJob(job, model, messages, LOQ_OLLAMA, {
-    numCtx: 2048, numGpu: 99, timeoutMs: 120_000,
+    numCtx: 2048, numGpu: 99, numBatch: 128, timeoutMs: 120_000,
     allowedTools: [], maxToolResultLen: 3000,
     systemPrompt: `You are an assistant on the user's self-hosted server (agent.ojee.net).
 
@@ -1640,9 +1641,14 @@ app.post('/api/loq/chat', auth, async (req, res) => {
 6. NEVER ask permission to use a tool. Just call it.
 7. Keep replies 1-3 sentences, conversational, no headers/bullets unless listing.
 
-### Tool syntax — output EXACTLY this, nothing else on the turn:
+### Tool syntax — output EXACTLY one of these, nothing else on the turn:
 web_fetch({"url":"https://..."})
 web_search({"query":"..."})
+get_stats({})                  — CPU %, memory, disk, temperature, GPU
+get_services({})               — docker compose services and their state
+list_models({})                — Ollama models installed on this server
+list_dir({"path":"/abs/path"}) — directory listing (stack is at /home/ojee/stack)
+read_file({"path":"/abs/path"}) — read a text file (never read .env)
 
 ### PREFERRED URLs for web_fetch (return clean JSON — use these over web_search):
 - Current time: https://timeapi.io/api/Time/current/zone?timeZone=<IANA zone, e.g. America/Los_Angeles, Africa/Cairo, Asia/Tokyo>
