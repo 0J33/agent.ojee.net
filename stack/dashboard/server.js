@@ -1491,8 +1491,12 @@ const processChatJob = async (job, model, messages, ollamaUrl = OLLAMA, opts = {
       }
       const convText = toolCalls.length ? '' : textOut;
       conv.push({ role: 'assistant', content: convText, tool_calls: toolCalls.length ? toolCalls : undefined });
-      // Content already emitted token-by-token during streaming
+      // Content already emitted token-by-token during streaming.  When a
+      // text-based tool call is detected after streaming, the raw syntax
+      // ("web_search({...})") has already reached the client — tell the UI
+      // to wipe it before we stream the post-tool answer.
       if (!toolCalls.length) { finish(); return; }
+      emit({ clear_message: true });
       for (const tc of toolCalls) {
         const name = tc.function?.name;
         let args = tc.function?.arguments;

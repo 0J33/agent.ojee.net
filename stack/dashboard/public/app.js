@@ -811,7 +811,10 @@ const panelChatOllama = () => {
           try {
             const j = JSON.parse(p);
             if (j.job_id) { state.chatJobId = j.job_id; persistChat(); }
-            else if (j.message?.content) {
+            else if (j.clear_message) {
+              state.chat[state.chat.length - 1].content = '';
+              render();
+            } else if (j.message?.content) {
               if (state.chatStatus !== 'typing') state.chatStatus = 'typing';
               state.chat[state.chat.length - 1].content += j.message.content;
               render();
@@ -983,7 +986,10 @@ const reconnectLoqJob = async (jobId) => {
         const p = line.slice(6); if (p === '[DONE]') continue;
         try {
           const j = JSON.parse(p); gotAny = true;
-          if (j.message?.content) {
+          if (j.clear_message) {
+            state.loqAgent.chat[state.loqAgent.chat.length - 1].content = '';
+            render();
+          } else if (j.message?.content) {
             state.loqAgent.status = 'typing';
             state.loqAgent.chat[state.loqAgent.chat.length - 1].content += j.message.content;
             render();
@@ -1090,7 +1096,10 @@ const panelChatLoq = () => {
           try {
             const j = JSON.parse(p);
             if (j.job_id) { lq.jobId = j.job_id; persistLoq(); }
-            else if (j.message?.content) {
+            else if (j.clear_message) {
+              lq.chat[lq.chat.length - 1].content = '';
+              render();
+            } else if (j.message?.content) {
               if (lq.status !== 'typing') lq.status = 'typing';
               lq.chat[lq.chat.length - 1].content += j.message.content;
               render();
@@ -1697,7 +1706,10 @@ const reconnectChatJob = async (jobId) => {
         try {
           const j = JSON.parse(p);
           gotAny = true;
-          if (j.message?.content) {
+          if (j.clear_message) {
+            state.chat[state.chat.length - 1].content = '';
+            render();
+          } else if (j.message?.content) {
             state.chatStatus = 'typing';
             state.chat[state.chat.length - 1].content += j.message.content;
             render();
