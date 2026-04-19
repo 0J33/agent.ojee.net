@@ -1338,7 +1338,9 @@ const processChatJob = async (job, model, messages, ollamaUrl = OLLAMA, opts = {
   const pickTools = () => {
     if (opts.noTools) return [];
     if (isGreeting) return [];
-    return wantsN8n ? TOOLS : TOOLS.filter(t => !t.function.name.startsWith('n8n_'));
+    let pool = wantsN8n ? TOOLS : TOOLS.filter(t => !t.function.name.startsWith('n8n_'));
+    if (opts.allowedTools) pool = pool.filter(t => opts.allowedTools.includes(t.function.name));
+    return pool;
   };
   const MAX_ITER = 6;
   const OLLAMA_TIMEOUT = opts.timeoutMs || 180_000; // 3 min per Ollama turn
@@ -1499,8 +1501,9 @@ const processChatJob = async (job, model, messages, ollamaUrl = OLLAMA, opts = {
         let result;
         try { result = await runTool(name, args); }
         catch (e) { result = `error: ${e.message}`; }
-        const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
+        let resultStr = typeof result === 'string' ? result : JSON.stringify(result);
         emit({ tool_result: { name, preview: resultStr.slice(0, 400) } });
+        if (opts.maxToolResultLen) resultStr = resultStr.slice(0, opts.maxToolResultLen);
         conv.push({ role: 'tool', content: resultStr });
       }
     }
@@ -1615,19 +1618,32 @@ app.post('/api/loq/chat', auth, async (req, res) => {
   sseWrite(res, { job_id: jobId });
   job.listeners.add(res);
   res.on('close', () => job.listeners.delete(res));
-  // Loq runs on CPU — the full ~5K-token system prompt takes minutes to eval.
-  // Use a tiny prompt and skip tools so responses arrive in seconds.
+  // Loq runs on CPU — tool definitions bloat prompt-eval by minutes.
+  // Don't send tools to Ollama (allowedTools:[]) but keep the system
+  // prompt's tool instructions so the model writes tool calls as text.
+  // The text-based detection in processChatJob catches and executes them.
   processChatJob(job, model, messages, LOQ_OLLAMA, {
-    numCtx: 8192, numGpu: 99, noTools: true,
-    systemPrompt: `You are an assistant running locally on the user's laptop (Loq). You are part of the user's self-hosted stack at agent.ojee.net but this instance has NO tools and NO internet access.
+    numCtx: 8192, numGpu: 99, timeoutMs: 600_000,
+    allowedTools: [], maxToolResultLen: 500,
+    systemPrompt: `You are an assistant on the user's self-hosted server (agent.ojee.net).
 
-### HARD RULES — obey above all else
+### HARD RULES
+1. NEVER say "I can't browse the web", "I don't have real-time access", or any variant. You HAVE web_search — call it.
+2. NEVER tell the user how to find the answer themselves. FIND IT by calling a tool. If no tool works, say "I don't know".
+3. NEVER refuse a topic (medical, legal, etc). Give the best answer + one-line disclaimer.
+4. NEVER invent facts. If unsure, call web_search or say "I don't know".
+5. NEVER ask permission to use a tool. Just call it.
+6. Keep replies 1-3 sentences, conversational, no headers/bullets unless listing.
 
-1. NEVER invent real-time data (current time, weather, prices, scores, news, stock prices, live results). You do NOT have internet. If asked, say you don't have live access right now and suggest they ask on the main Chat mode which has web search.
-2. NEVER refuse a topic (medical, legal, etc). Give the best answer + one-line disclaimer.
-3. NEVER invent facts. If you aren't sure, say "I don't know".
-4. Keep replies 1-3 sentences, conversational, no headers/bullets unless listing.
-5. For math, code, definitions, or timeless facts — answer from your knowledge.`,
+### Tools — call by writing EXACTLY this syntax (the system will execute it):
+- web_search({"query":"your search"}) — internet search. USE for current time, weather, prices, news.
+- web_fetch({"url":"https://..."}) — fetch a URL directly.
+
+Example: user asks "what time is it in Cairo" → you output ONLY:
+web_search({"query":"current time in Cairo"})
+Then the system gives you the result and you answer the user.
+
+For math, code, definitions, or timeless facts — answer from memory. For anything current — output a tool call IMMEDIATELY, nothing else.`,
   });
 });
 
