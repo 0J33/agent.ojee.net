@@ -48,3 +48,10 @@ flow.agent.ojee.net {
   reverse_proxy n8n:5678
   encode gzip
 }
+
+# CouchDB for Obsidian (Self-hosted LiveSync plugin).  LiveSync does
+# attachment streaming, so don't gzip — let CouchDB send raw JSON.
+sync.agent.ojee.net {
+  import cf_tls
+  reverse_proxy couchdb:5984
+}

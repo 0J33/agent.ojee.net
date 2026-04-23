@@ -23,6 +23,7 @@ services:
       - dashboard
       - openwebui
       - n8n
+      - couchdb
 
   # Kept for legacy tailnet URL access (tailscale serve → 127.0.0.1:8000)
   nginx:
@@ -110,6 +111,22 @@ services:
     volumes:
       - n8n_data:/home/node/.n8n
 
+  # Obsidian vault backend — Self-hosted LiveSync plugin replicates
+  # against CouchDB over HTTPS at sync.agent.ojee.net.  The required
+  # CORS + max-body-size tweaks are applied at runtime by ./couchdb/init.sh
+  # via the HTTP config API, not via a mounted local.ini.
+  couchdb:
+    image: couchdb:3
+    container_name: couchdb
+    restart: unless-stopped
+    expose:
+      - "5984"
+    environment:
+      - COUCHDB_USER=${COUCHDB_USER:-obsidian}
+      - COUCHDB_PASSWORD=${COUCHDB_PASSWORD:-change-me}
+    volumes:
+      - couchdb_data:/opt/couchdb/data
+
 volumes:
   openwebui_data:
   n8n_data:
@@ -117,3 +134,4 @@ volumes:
   caddy_config:
   caddy_logs:
   dashboard_data:
+  couchdb_data:
