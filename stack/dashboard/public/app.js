@@ -798,6 +798,7 @@ const panelChatOllama = () => {
       const reader = r.body.getReader();
       const dec = new TextDecoder();
       let buf = '';
+      let gotDone = false;
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -807,7 +808,7 @@ const panelChatOllama = () => {
         for (const line of lines) {
           if (!line.startsWith('data: ')) continue;
           const p = line.slice(6);
-          if (p === '[DONE]') continue;
+          if (p === '[DONE]') { gotDone = true; continue; }
           try {
             const j = JSON.parse(p);
             if (j.job_id) { state.chatJobId = j.job_id; persistChat(); }
@@ -829,6 +830,14 @@ const panelChatOllama = () => {
             }
           } catch {}
         }
+      }
+      // Stream ended without [DONE] — proxy/network dropped the connection
+      // but the server job is still running.  Reconnect and let the replay
+      // finish the message.
+      if (!gotDone && state.chatJobId) {
+        state.chatStatus = 'reconnecting'; persistChat(); render();
+        reconnectChatJob(state.chatJobId);
+        return;
       }
       if (state.activeChatId) saveChat().catch(() => {});
     } catch (e) {
@@ -1087,6 +1096,7 @@ const panelChatLoq = () => {
       });
       const reader = r.body.getReader(); const dec = new TextDecoder();
       let buf = '';
+      let gotDone = false;
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -1094,7 +1104,8 @@ const panelChatLoq = () => {
         const lines = buf.split('\n'); buf = lines.pop() || '';
         for (const line of lines) {
           if (!line.startsWith('data: ')) continue;
-          const p = line.slice(6); if (p === '[DONE]') continue;
+          const p = line.slice(6);
+          if (p === '[DONE]') { gotDone = true; continue; }
           try {
             const j = JSON.parse(p);
             if (j.job_id) { lq.jobId = j.job_id; persistLoq(); }
@@ -1114,6 +1125,14 @@ const panelChatLoq = () => {
             } else if (j.tool_result) { lq.status = 'thinking'; render(); }
           } catch {}
         }
+      }
+      // Stream ended without [DONE] — proxy/network dropped the connection
+      // but the server job is still running.  Reconnect and let the replay
+      // finish the message.
+      if (!gotDone && lq.jobId) {
+        lq.status = 'reconnecting'; persistLoq(); render();
+        reconnectLoqJob(lq.jobId);
+        return;
       }
       if (lq.activeChatId) loqSaveChat().catch(() => {});
     } catch (e) {
@@ -1335,6 +1354,7 @@ const caSend = async (text) => {
     const reader = r.body.getReader();
     const dec = new TextDecoder();
     let buf = '';
+    let gotDone = false;
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -1344,7 +1364,7 @@ const caSend = async (text) => {
       for (const line of lines) {
         if (!line.startsWith('data: ')) continue;
         const p = line.slice(6);
-        if (p === '[DONE]') continue;
+        if (p === '[DONE]') { gotDone = true; continue; }
         try {
           const e = JSON.parse(p);
           const last = state.codeAgent.messages[state.codeAgent.messages.length - 1];
@@ -1358,6 +1378,13 @@ const caSend = async (text) => {
           else if (e.type === 'result') { state.codeAgent.status = e.is_error ? 'error' : null; }
         } catch {}
       }
+    }
+    // Stream ended without [DONE] — connection dropped but the session
+    // may still be producing output.  Reconnect and replay.
+    if (!gotDone && state.codeAgent.active && state.codeAgent.busy) {
+      state.codeAgent.status = 'reconnecting'; persistCode(); render();
+      caReconnect(state.codeAgent.active);
+      return;
     }
   } catch (e) {
     if (e.name === 'AbortError') {}
