@@ -20,12 +20,6 @@ const N8N_BASE = process.env.N8N_BASE_URL || 'http://n8n:5678';
 const N8N_API_KEY = process.env.N8N_API_KEY || '';
 const CODE_AGENT_URL = process.env.CODE_AGENT_URL || '';
 const CODE_AGENT_TOKEN = process.env.CODE_AGENT_TOKEN || '';
-// Think mode: a slow, large local model that runs the same toolset as Chat
-// but is meant for one-shot deep tasks the user can walk away from.  When
-// the job finishes, optionally ping a Discord webhook so the user knows.
-const THINK_MODEL = process.env.THINK_MODEL || 'qwen2.5:32b';
-const THINK_DISCORD_WEBHOOK = process.env.THINK_DISCORD_WEBHOOK || '';
-const THINK_DASHBOARD_URL = process.env.THINK_DASHBOARD_URL || 'https://agent.ojee.net/';
 
 const n8nApi = async (path, opts = {}) => {
   if (!N8N_API_KEY) throw new Error('N8N_API_KEY not set in .env — generate one in n8n Settings → n8n API');
@@ -1323,16 +1317,6 @@ const processChatJob = async (job, model, messages, ollamaUrl = OLLAMA, opts = {
     job.done = true;
     job.doneAt = Date.now();
     job.listeners.clear();
-    if (opts.onFinish) {
-      // Reconstruct the assistant's final content from the event log,
-      // honouring any clear_message events that wiped earlier text.
-      let finalContent = '';
-      for (const evt of job.events) {
-        if (evt.clear_message) finalContent = '';
-        else if (evt.message?.content) finalContent += evt.message.content;
-      }
-      Promise.resolve(opts.onFinish(finalContent, job)).catch(() => {});
-    }
   };
   const sysContent = opts.systemPrompt != null ? opts.systemPrompt : await buildSystemPrompt();
   const conv = sysContent
@@ -1571,73 +1555,6 @@ app.get('/api/chat/jobs/:id', auth, (req, res) => {
   res.on('close', () => job.listeners.delete(res));
 });
 
-// ─── Think mode (slow large local model + full toolset, async-friendly) ──
-// Same machinery as /api/chat: full system prompt, full TOOLS, native
-// Ollama tool calling.  Differences: a much bigger model (THINK_MODEL,
-// default qwen2.5:32b), 30 min per-turn timeout, and a Discord ping
-// when the job finishes so the user can leave the tab and come back.
-
-const sendThinkDoneToDiscord = async (job, finalContent, originalQuestion) => {
-  if (!THINK_DISCORD_WEBHOOK) return;
-  const elapsedSec = Math.round(((job.doneAt || Date.now()) - (job.startedAt || job.doneAt || Date.now())) / 1000);
-  const elapsed = elapsedSec >= 60 ? `${Math.floor(elapsedSec / 60)}m ${elapsedSec % 60}s` : `${elapsedSec}s`;
-  const reply = (finalContent || '(no content)').slice(0, 1700);
-  const tools = Array.from(new Set(job.events.filter(e => e.tool_call).map(e => e.tool_call.name)));
-  try {
-    await fetch(THINK_DISCORD_WEBHOOK, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        embeds: [{
-          title: 'Think result ready',
-          url: THINK_DASHBOARD_URL,
-          description: reply.length < (finalContent || '').length ? reply + '\n\n…(truncated, full reply on dashboard)' : reply,
-          color: 0x9b59b6,
-          fields: [
-            { name: 'Question', value: (originalQuestion || '').slice(0, 1000) || '(empty)' },
-            { name: 'Elapsed', value: elapsed, inline: true },
-            { name: 'Tools used', value: tools.length ? tools.join(', ') : 'none', inline: true },
-          ],
-          footer: { text: 'agent.ojee.net · Think mode' },
-          timestamp: new Date().toISOString(),
-        }],
-      }),
-    });
-  } catch {}
-};
-
-app.post('/api/think/chat', auth, async (req, res) => {
-  const { model, messages } = req.body;
-  const jobId = require('crypto').randomBytes(8).toString('hex');
-  const startedAt = Date.now();
-  const job = { id: jobId, events: [], done: false, doneAt: null, startedAt, listeners: new Set() };
-  chatJobs.set(jobId, job);
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-  sseWrite(res, { job_id: jobId });
-  job.listeners.add(res);
-  res.on('close', () => job.listeners.delete(res));
-  const lastUserQ = (messages.filter(m => m.role === 'user').pop()?.content || '').trim();
-  processChatJob(job, model || THINK_MODEL, messages, OLLAMA, {
-    timeoutMs: 30 * 60 * 1000, // 30 min per turn — large models on partial CPU offload
-    numCtx: 16384,
-    onFinish: (finalContent) => sendThinkDoneToDiscord(job, finalContent, lastUserQ),
-  });
-});
-
-app.get('/api/think/jobs/:id', auth, (req, res) => {
-  const job = chatJobs.get(req.params.id);
-  if (!job) return res.status(404).json({ error: 'job not found' });
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-  for (const evt of job.events) sseWrite(res, evt);
-  if (job.done) { res.write('data: [DONE]\n\n'); return res.end(); }
-  job.listeners.add(res);
-  res.on('close', () => job.listeners.delete(res));
-});
-
 // ─── Loq laptop chat (second Ollama on tailnet) ──────────────────────────
 // Same chat machinery + same tools + same system prompt, but the upstream
 // is the loq laptop's Ollama. Status probes confirm reachability before the
@@ -1712,12 +1629,16 @@ app.post('/api/loq/chat', auth, async (req, res) => {
   sseWrite(res, { job_id: jobId });
   job.listeners.add(res);
   res.on('close', () => job.listeners.delete(res));
-  // Loq now runs on GPU (RTX 5060 8GB, CUDA 13, sm_120) — ~40 tok/s gen.
-  // VRAM only fits ~2K context with a 12B model, so keep the prompt tight
-  // and skip tool defs.  Text-based tool detection still catches web_search
-  // calls the model writes inline.
+  // Loq now runs on GPU (RTX 5060 8GB, CUDA 13, sm_120) — ~40 tok/s gen
+  // for 12-14B models with full GPU offload.  Bigger models (32B+) don't
+  // fit in 8GB VRAM with num_gpu=99 forced, so let Ollama auto-decide
+  // partial offload for those.  Heuristic: any model named *.b where
+  // *>=20 drops the forced offload.
+  const sizeMatch = (model || '').match(/(\d+)b/i);
+  const modelSizeB = sizeMatch ? parseInt(sizeMatch[1], 10) : 0;
+  const tooBigForFullGpu = modelSizeB >= 20;
   processChatJob(job, model, messages, LOQ_OLLAMA, {
-    numCtx: 2048, numGpu: 99, numBatch: 128, timeoutMs: 120_000,
+    numCtx: 2048, ...(tooBigForFullGpu ? {} : { numGpu: 99 }), numBatch: 128, timeoutMs: 120_000,
     allowedTools: [], maxToolResultLen: 3000,
     textToolAllow: ['web_search', 'web_fetch', 'get_stats', 'get_services', 'list_models', 'list_dir', 'read_file'],
     systemPrompt: `You are an assistant on the user's self-hosted server (agent.ojee.net).

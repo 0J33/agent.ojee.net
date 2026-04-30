@@ -223,16 +223,10 @@ let state = {
   chatJobId: null, chatStartTs: null,
   actionMsg: '',
   toasts: [],
-  chatMode: localStorage.getItem('chat_mode') || 'chat',  // 'chat' | 'code' | 'loq' | 'think'
+  chatMode: localStorage.getItem('chat_mode') || 'chat',  // 'chat' | 'code' | 'loq'
   loqAgent: {
     reachable: false, controlReachable: false, checked: false, controlOnline: false,
     models: [], chatModel: localStorage.getItem('loq_model') || '',
-    chat: [], busy: false, status: null, dirty: false,
-    jobId: null, startTs: null,
-    activeChatId: null, showSavedList: false,
-  },
-  thinkAgent: {
-    chatModel: localStorage.getItem('think_model') || 'qwen2.5:32b',
     chat: [], busy: false, status: null, dirty: false,
     jobId: null, startTs: null,
     activeChatId: null, showSavedList: false,
@@ -298,36 +292,6 @@ const restoreLoq = () => {
         state.loqAgent.jobId = s.jobId;
         state.loqAgent.startTs = s.startTs || null;
         state.loqAgent.status = 'reconnecting';
-      }
-    }
-  } catch {}
-};
-const persistThink = () => {
-  try {
-    localStorage.setItem('think_state', JSON.stringify({
-      chat: state.thinkAgent.chat,
-      chatModel: state.thinkAgent.chatModel,
-      busy: state.thinkAgent.busy,
-      jobId: state.thinkAgent.jobId,
-      startTs: state.thinkAgent.startTs || null,
-      activeChatId: state.thinkAgent.activeChatId,
-      dirty: state.thinkAgent.dirty,
-    }));
-  } catch {}
-};
-const restoreThink = () => {
-  try {
-    const s = JSON.parse(localStorage.getItem('think_state'));
-    if (s) {
-      state.thinkAgent.chat = s.chat || [];
-      state.thinkAgent.chatModel = s.chatModel || state.thinkAgent.chatModel;
-      state.thinkAgent.activeChatId = s.activeChatId || null;
-      state.thinkAgent.dirty = s.dirty || false;
-      if (s.busy && s.jobId) {
-        state.thinkAgent.busy = true;
-        state.thinkAgent.jobId = s.jobId;
-        state.thinkAgent.startTs = s.startTs || null;
-        state.thinkAgent.status = 'reconnecting';
       }
     }
   } catch {}
@@ -773,14 +737,11 @@ const chatModesSwitch = () => el('div', { class: 'chat-modes' },
     'Code') : null,
   (state.loqAgent.reachable || state.loqAgent.controlReachable) ? el('button', { class: 'chat-mode-btn' + (state.chatMode === 'loq' ? ' active' : ''), onclick: () => setChatMode('loq') },
     'Loq') : null,
-  el('button', { class: 'chat-mode-btn' + (state.chatMode === 'think' ? ' active' : ''), onclick: () => setChatMode('think'), title: 'Slow large model — Discord pings when done' },
-    'Think'),
 );
 
 const panelChat = () => {
   if (state.chatMode === 'code' && state.codeAgent.enabled) return panelChatCode();
   if (state.chatMode === 'loq' && (state.loqAgent.reachable || state.loqAgent.controlReachable)) return panelChatLoq();
-  if (state.chatMode === 'think') return panelChatThink();
   return panelChatOllama();
 };
 
@@ -1197,9 +1158,12 @@ const panelChatLoq = () => {
     persistLoq(); render();
   };
 
+  // Hide models too large for Loq's 8 GB VRAM (anything > ~14 GB will OOM
+  // even with partial offload and crash the laptop's other apps).
+  const loqModels = lq.models.filter(m => !m.size || m.size <= 15e9);
   const modelSel = el('select', { class: 'chat-select',
     onchange: (e) => { lq.chatModel = e.target.value; localStorage.setItem('loq_model', e.target.value); render(); } },
-    ...(lq.models.length ? lq.models : [{ name: 'no models on loq' }]).map(m =>
+    ...(loqModels.length ? loqModels : [{ name: 'no models on loq' }]).map(m =>
       el('option', { value: m.name, ...(m.name === lq.chatModel ? { selected: true } : {}) }, m.name),
     ),
   );
@@ -1256,279 +1220,6 @@ const panelChatLoq = () => {
   );
 };
 
-// ─── Think mode (slow large local model on HP — async-friendly) ─────────
-// Same /api/chat machinery on the backend (full system prompt + every
-// tool, including n8n) but routed at /api/think/chat with a 30 min
-// timeout and a Discord ping when the job finishes.
-
-const thinkNewChat = () => {
-  const t = state.thinkAgent;
-  t.chat = []; t.activeChatId = null; t.dirty = false;
-  t.status = null; t.jobId = null; t.startTs = null;
-  persistThink(); render();
-};
-const thinkSaveChat = async () => {
-  const t = state.thinkAgent;
-  if (!t.chat.length) return;
-  const id = t.activeChatId || randId();
-  const firstUser = t.chat.find(m => m.role === 'user');
-  const title = (firstUser?.content || 'Think chat').slice(0, 80);
-  await api(`/api/chats/${id}`, {
-    method: 'PUT',
-    body: JSON.stringify({ title, model: t.chatModel, messages: t.chat }),
-  });
-  t.activeChatId = id; t.dirty = false;
-  await loadSavedChats();
-  persistThink(); render();
-};
-const thinkLoadChat = async (id) => {
-  const t = state.thinkAgent;
-  if (t.dirty && !t.activeChatId && !confirm('Discard unsaved chat?')) return;
-  const c = await api(`/api/chats/${id}`);
-  if (!c) return;
-  t.chat = c.messages || [];
-  t.activeChatId = c.id;
-  if (c.model) t.chatModel = c.model;
-  t.dirty = false; t.showSavedList = false;
-  t.busy = false; t.status = null; t.jobId = null; t.startTs = null;
-  persistThink(); render();
-};
-
-const reconnectThinkJob = async (jobId) => {
-  const t = state.thinkAgent;
-  const lastMsg = t.chat[t.chat.length - 1];
-  const snapshot = lastMsg && lastMsg.role === 'assistant'
-    ? { content: lastMsg.content || '', tools: (lastMsg.tools || []).slice() } : null;
-  try {
-    const r = await fetch(`/api/think/jobs/${jobId}`, { headers: headers() });
-    if (!r.ok) {
-      t.busy = false; t.status = null; t.jobId = null; t.startTs = null;
-      const last = t.chat[t.chat.length - 1];
-      if (last?.role === 'assistant' && !last.content && snapshot?.content) last.content = snapshot.content;
-      if (last?.role === 'assistant' && !last.content) last.content = '*(session expired)*';
-      persistThink(); render(); return;
-    }
-    if (lastMsg && lastMsg.role === 'assistant') { lastMsg.content = ''; lastMsg.tools = []; }
-    render();
-    const reader = r.body.getReader(); const dec = new TextDecoder();
-    let buf = ''; let gotDone = false;
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      const lines = buf.split('\n'); buf = lines.pop() || '';
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        const p = line.slice(6);
-        if (p === '[DONE]') { gotDone = true; continue; }
-        try {
-          const j = JSON.parse(p);
-          if (j.clear_message) {
-            t.chat[t.chat.length - 1].content = ''; render();
-          } else if (j.message?.content) {
-            t.status = 'typing';
-            t.chat[t.chat.length - 1].content += j.message.content; render();
-          } else if (j.tool_call) {
-            t.status = j.tool_call.name.replace(/^(get|list|read|web)_/, '');
-            const last = t.chat[t.chat.length - 1];
-            if (!last.tools) last.tools = [];
-            if (!last.tools.includes(j.tool_call.name)) last.tools.push(j.tool_call.name);
-            render();
-          } else if (j.tool_result) { t.status = 'thinking'; render(); }
-        } catch {}
-      }
-    }
-  } catch {}
-  const last = t.chat[t.chat.length - 1];
-  if (last?.role === 'assistant') {
-    last.ts = Date.now();
-    last.elapsed_ms = t.startTs ? Date.now() - t.startTs : null;
-    if (!last.content && snapshot?.content) { last.content = snapshot.content; last.tools = snapshot.tools; }
-  }
-  t.jobId = null; t.busy = false; t.status = null; t.startTs = null;
-  if (t.activeChatId) thinkSaveChat().catch(() => {});
-  persistThink(); render();
-};
-
-const panelChatThink = () => {
-  const t = state.thinkAgent;
-  const lastIdx = t.chat.length - 1;
-  const log = el('div', { class: 'chat-log' });
-
-  if (t.chat.length === 0) {
-    log.appendChild(el('div', { class: 'chat-empty' },
-      ico('message', 28),
-      el('div', {}, t.chatModel ? `Think · ${t.chatModel}` : 'Pick a model'),
-      el('div', { class: 'muted', style: 'font-size: 0.78rem; max-width: 360px; text-align: center' },
-        'Slow on purpose — uses a large local model with the full toolset (web, n8n, server stats, files). Send a hard question, close the tab, get pinged on Discord when it\'s done.'),
-    ));
-  } else {
-    t.chat.forEach((m, i) => log.appendChild(renderChatMsg(m, {
-      isLast: i === lastIdx, busy: t.busy, busyStatus: t.status, busyStart: t.startTs,
-    })));
-  }
-
-  const input = el('textarea', {
-    class: 'chat-input', rows: '1',
-    placeholder: t.chatModel ? 'Ask the slow model anything…' : 'Pick a model',
-  });
-  input.value = localStorage.getItem('draft_think') || '';
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
-  });
-  input.addEventListener('input', () => {
-    localStorage.setItem('draft_think', input.value);
-    input.style.height = 'auto';
-    input.style.height = Math.min(input.scrollHeight, 200) + 'px';
-  });
-
-  const send = async () => {
-    const text = input.value.trim();
-    if (!text || t.busy || !t.chatModel) return;
-    const now = Date.now();
-    t.chat.push({ role: 'user', content: text, ts: now });
-    t.chat.push({ role: 'assistant', content: '', model: t.chatModel, tools: [], ts: null, elapsed_ms: null });
-    t.busy = true; t.status = 'thinking'; t.dirty = true; t.startTs = now;
-    input.value = ''; localStorage.removeItem('draft_think');
-    t.abort = new AbortController();
-    persistThink(); render();
-    try {
-      const r = await fetch('/api/think/chat', {
-        method: 'POST',
-        headers: { ...headers(), 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: t.chatModel,
-          messages: t.chat.slice(0, -1).map(m => ({ role: m.role, content: m.content })),
-        }),
-        signal: t.abort.signal,
-      });
-      const reader = r.body.getReader(); const dec = new TextDecoder();
-      let buf = ''; let gotDone = false;
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
-        const lines = buf.split('\n'); buf = lines.pop() || '';
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          const p = line.slice(6);
-          if (p === '[DONE]') { gotDone = true; continue; }
-          try {
-            const j = JSON.parse(p);
-            if (j.job_id) { t.jobId = j.job_id; persistThink(); }
-            else if (j.clear_message) {
-              t.chat[t.chat.length - 1].content = ''; render();
-            } else if (j.message?.content) {
-              if (t.status !== 'typing') t.status = 'typing';
-              t.chat[t.chat.length - 1].content += j.message.content; render();
-            } else if (j.tool_call) {
-              t.status = j.tool_call.name.replace(/^(get|list|read|web)_/, '');
-              const last = t.chat[t.chat.length - 1];
-              if (!last.tools) last.tools = [];
-              if (!last.tools.includes(j.tool_call.name)) last.tools.push(j.tool_call.name);
-              render();
-            } else if (j.tool_result) { t.status = 'thinking'; render(); }
-          } catch {}
-        }
-      }
-      if (!gotDone && t.jobId) {
-        t.status = 'reconnecting'; persistThink(); render();
-        reconnectThinkJob(t.jobId);
-        return;
-      }
-      if (t.activeChatId) thinkSaveChat().catch(() => {});
-    } catch (e) {
-      if (e.name === 'AbortError') {
-        const last = t.chat[t.chat.length - 1];
-        if (last?.role === 'assistant' && !last.content) last.content = '*(stopped)*';
-      } else if (t.jobId) {
-        t.status = 'reconnecting'; persistThink(); render();
-        reconnectThinkJob(t.jobId);
-        return;
-      } else {
-        t.chat[t.chat.length - 1].content = `Error: ${e.message}`;
-      }
-    }
-    const last = t.chat[t.chat.length - 1];
-    if (last?.role === 'assistant') {
-      last.ts = Date.now();
-      last.elapsed_ms = t.startTs ? Date.now() - t.startTs : null;
-    }
-    t.jobId = null; t.busy = false; t.status = null; t.startTs = null;
-    persistThink(); render();
-  };
-
-  // Model picker — Think runs on HP's Ollama. Sort largest first so big
-  // "Think-class" models float to the top.  If the configured Think model
-  // isn't pulled yet, surface a disabled placeholder so the user sees what
-  // is coming and doesn't think the dropdown is showing the wrong thing.
-  const sorted = [...state.models].sort((a, b) => (b.size || 0) - (a.size || 0));
-  const present = new Set(sorted.map(m => m.name));
-  const defaultThink = state.thinkAgent.defaultModelName || 'qwen2.5:32b';
-  const placeholder = !present.has(defaultThink)
-    ? [{ name: defaultThink, label: `${defaultThink} (not pulled yet)`, disabled: true }]
-    : [];
-  const options = [...placeholder, ...sorted];
-  const modelSel = el('select', { class: 'chat-select',
-    onchange: (e) => { t.chatModel = e.target.value; localStorage.setItem('think_model', e.target.value); render(); } },
-    ...(options.length ? options : [{ name: 'no models on HP' }]).map(m =>
-      el('option', {
-        value: m.name,
-        ...(m.disabled ? { disabled: true } : {}),
-        ...(m.name === t.chatModel ? { selected: true } : {}),
-      }, m.label || m.name),
-    ),
-  );
-
-  const toolbar = el('div', { class: 'chat-toolbar' },
-    modelSel,
-    el('button', { class: 'btn sm', onclick: thinkNewChat, title: 'New chat' }, ico('plus', 14)),
-    el('button', { class: 'btn sm', onclick: thinkSaveChat, title: 'Save chat', disabled: t.chat.length === 0 }, 'Save'),
-    el('button', { class: 'btn sm', onclick: () => { t.showSavedList = !t.showSavedList; render(); }, title: 'Browse saved' }, `${t.showSavedList ? 'Hide' : 'Saved'} (${state.savedChats.length})`),
-  );
-
-  const savedList = t.showSavedList
-    ? el('div', { class: 'saved-list' },
-        state.savedChats.length === 0
-          ? el('div', { class: 'muted', style: 'padding:10px;text-align:center;font-size:0.78rem' }, 'no saved chats')
-          : state.savedChats.map(c =>
-              el('div', { class: 'saved-item' + (c.id === t.activeChatId ? ' active' : ''), onclick: () => thinkLoadChat(c.id) },
-                el('div', { class: 'saved-title' }, c.title),
-                el('div', { class: 'saved-actions' },
-                  el('button', { class: 'btn ghost icon', onclick: (e) => renameChat(c.id, e), title: 'Rename' }, ico('pencil', 12)),
-                  el('button', { class: 'btn ghost icon danger', onclick: (e) => deleteChat(c.id, e), title: 'Delete' }, ico('trash', 12)),
-                ),
-              ),
-            ),
-      )
-    : null;
-
-  const activeBadge = t.activeChatId
-    ? el('div', { class: 'chat-active-badge' }, `editing: ${(state.savedChats.find(c => c.id === t.activeChatId) || {}).title || '—'}`)
-    : null;
-
-  return el('div', { class: 'panel chat-panel', 'data-panel': 'chat' },
-    el('div', { class: 'panel-head' },
-      el('span', {}, 'Think'),
-      chatModesSwitch(),
-    ),
-    toolbar,
-    savedList,
-    activeBadge,
-    el('div', { class: 'chat-wrap' },
-      log,
-      el('div', { class: 'chat-form' },
-        input,
-        el('button', {
-          class: 'btn primary chat-send' + (t.busy ? ' chat-stop' : ''),
-          onclick: t.busy ? () => t.abort?.abort() : send,
-          disabled: !t.chatModel,
-          title: t.busy ? 'Stop' : 'Send',
-        }, t.busy ? ico('stop', 14) : ico('send', 14)),
-      ),
-    ),
-  );
-};
 
 // ─── Code Agent (Claude Code) ──────────────────────────────────────────
 const caLoadDir = async (p) => {
@@ -2137,15 +1828,6 @@ const refresh = async () => {
       state.chatModel = state.models[0].name;
       needsRender = true;
     }
-    // Think wants the largest model.  If the user-saved choice is gone
-    // (still pulling, or got removed), fall back to the largest one we do
-    // have so a Send doesn't blow up with "model not found".
-    const present = new Set(state.models.map(m => m.name));
-    if (!present.has(state.thinkAgent.chatModel) && state.models.length) {
-      const largest = [...state.models].sort((a, b) => (b.size || 0) - (a.size || 0))[0];
-      state.thinkAgent.chatModel = largest.name;
-      needsRender = true;
-    }
   }
   if (!state.codeAgent.checked) {
     state.codeAgent.checked = true;
@@ -2167,8 +1849,15 @@ const refresh = async () => {
       state.loqAgent.controlReachable = !!lq.controlReachable;
       state.loqAgent.controlOnline = !!lq.daemon;
       state.loqAgent.models = lq.models || [];
-      if (!state.loqAgent.chatModel && state.loqAgent.models.length) {
-        state.loqAgent.chatModel = state.loqAgent.models[0].name;
+      // Loq tab can only run models that fit in 8 GB VRAM (~14 GB blob).
+      // Anything bigger crashes the laptop, so don't let one stay selected.
+      const loqFits = state.loqAgent.models.filter(m => !m.size || m.size <= 15e9);
+      if (!state.loqAgent.chatModel || !loqFits.some(m => m.name === state.loqAgent.chatModel)) {
+        if (loqFits.length) {
+          state.loqAgent.chatModel = loqFits[0].name;
+          localStorage.setItem('loq_model', state.loqAgent.chatModel);
+          needsRender = true;
+        }
       }
       const after = `${state.loqAgent.reachable}|${state.loqAgent.controlReachable}`;
       if (before !== after) needsRender = true;
@@ -2183,7 +1872,6 @@ const boot = async () => {
   restoreChat();
   restoreCode();
   restoreLoq();
-  restoreThink();
   await loadSavedChats();
   render();
   refresh();
@@ -2201,10 +1889,6 @@ const boot = async () => {
     state.loqAgent.status = 'reconnecting'; render();
     reconnectLoqJob(state.loqAgent.jobId);
   }
-  if (state.thinkAgent.busy && state.thinkAgent.jobId) {
-    state.thinkAgent.status = 'reconnecting'; render();
-    reconnectThinkJob(state.thinkAgent.jobId);
-  }
 
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState !== 'visible') return;
@@ -2215,10 +1899,6 @@ const boot = async () => {
     if (state.loqAgent.busy && state.loqAgent.jobId) {
       state.loqAgent.status = 'reconnecting'; render();
       reconnectLoqJob(state.loqAgent.jobId);
-    }
-    if (state.thinkAgent.busy && state.thinkAgent.jobId) {
-      state.thinkAgent.status = 'reconnecting'; render();
-      reconnectThinkJob(state.thinkAgent.jobId);
     }
     if (state.codeAgent.busy && state.codeAgent.active) {
       state.codeAgent.status = 'reconnecting'; render();
