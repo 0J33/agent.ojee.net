@@ -1458,11 +1458,25 @@ const panelChatThink = () => {
     persistThink(); render();
   };
 
-  // Model picker — Think runs on HP's Ollama, so use state.models (server list).
+  // Model picker — Think runs on HP's Ollama. Sort largest first so big
+  // "Think-class" models float to the top.  If the configured Think model
+  // isn't pulled yet, surface a disabled placeholder so the user sees what
+  // is coming and doesn't think the dropdown is showing the wrong thing.
+  const sorted = [...state.models].sort((a, b) => (b.size || 0) - (a.size || 0));
+  const present = new Set(sorted.map(m => m.name));
+  const defaultThink = state.thinkAgent.defaultModelName || 'qwen2.5:32b';
+  const placeholder = !present.has(defaultThink)
+    ? [{ name: defaultThink, label: `${defaultThink} (not pulled yet)`, disabled: true }]
+    : [];
+  const options = [...placeholder, ...sorted];
   const modelSel = el('select', { class: 'chat-select',
     onchange: (e) => { t.chatModel = e.target.value; localStorage.setItem('think_model', e.target.value); render(); } },
-    ...(state.models.length ? state.models : [{ name: 'no models on HP' }]).map(m =>
-      el('option', { value: m.name, ...(m.name === t.chatModel ? { selected: true } : {}) }, m.name),
+    ...(options.length ? options : [{ name: 'no models on HP' }]).map(m =>
+      el('option', {
+        value: m.name,
+        ...(m.disabled ? { disabled: true } : {}),
+        ...(m.name === t.chatModel ? { selected: true } : {}),
+      }, m.label || m.name),
     ),
   );
 
@@ -2121,6 +2135,15 @@ const refresh = async () => {
     });
     if (!state.chatModel && state.models.length) {
       state.chatModel = state.models[0].name;
+      needsRender = true;
+    }
+    // Think wants the largest model.  If the user-saved choice is gone
+    // (still pulling, or got removed), fall back to the largest one we do
+    // have so a Send doesn't blow up with "model not found".
+    const present = new Set(state.models.map(m => m.name));
+    if (!present.has(state.thinkAgent.chatModel) && state.models.length) {
+      const largest = [...state.models].sort((a, b) => (b.size || 0) - (a.size || 0))[0];
+      state.thinkAgent.chatModel = largest.name;
       needsRender = true;
     }
   }
