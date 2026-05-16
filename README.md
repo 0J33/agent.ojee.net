@@ -1,215 +1,141 @@
 # Agent Stack
 
-Self-hosted AI agent + automation stack on the server, accessible over tailnet at `https://agent.ojee.net`.
+A self-hosted AI agent + automation stack: a custom dashboard that talks to a local **Ollama**, the full-featured **Open WebUI** chat, **n8n** for workflow automation, and an optional **CouchDB** for syncing an Obsidian vault. Everything runs in Docker behind **Caddy** with auto-renewing TLS.
 
-## Quick Access
+Designed to live behind **Tailscale** (no public ports) but works fine on a regular VPS too — it's a matter of which IP you bind Caddy to.
 
-| URL | What |
+## What you get
+
+| Surface | What it is |
 |---|---|
-| `https://agent.ojee.net/` | Custom dashboard (stats + chat + service controls) |
-| `https://agent.ojee.net/chat/` | Open WebUI (full-featured chat UI with RAG, history, model management) |
-| `https://agent.ojee.net/flow/` | n8n (visual workflow automation) |
+| `https://<DASHBOARD_DOMAIN>/` | Custom dashboard — live stats, container controls, a chat with full tool access (web search, file reads, n8n workflow CRUD, server stats) |
+| `https://<OPENWEBUI_DOMAIN>/` | Open WebUI — full chat UI with RAG, history, model management |
+| `https://<N8N_DOMAIN>/` | n8n — visual workflow automation |
+| `https://<COUCHDB_DOMAIN>/` | CouchDB — backend for the [Obsidian Self-hosted LiveSync plugin](https://github.com/vrtmrz/obsidian-livesync) |
 
-All routes are **tailnet-only**. Devices not on your tailnet cannot resolve or connect. Valid Let's Encrypt cert (auto-renews).
-
----
-
-## Setup on a New Device
-
-1. Install Tailscale from https://tailscale.com/download
-2. Sign in to the same tailnet
-3. Open `https://agent.ojee.net`
-
-No VPN, no port forwarding, no cert warnings.
+The dashboard's chat is the highlight: it has a system prompt that knows how to build n8n workflows, call free no-auth APIs (weather, time, currency, news, etc.), read files off the host, and pull live stats — all without leaving the chat box.
 
 ---
 
-## First-Run Accounts
+## Requirements
 
-| Service | Steps |
-|---|---|
-| Dashboard | Set `DASHBOARD_PASSWORD` in `.env` (copy `.env.example` first). To change later: edit `~/stack/.env`, then `docker compose up -d dashboard` |
-| Open WebUI | First signup becomes admin. Subsequent signups need admin approval |
-| n8n | First signup becomes owner. Use email + strong password |
-
----
-
-## What Each Service Does
-
-### Dashboard (`/`)
-- Real-time system stats: CPU, RAM, swap, disk, temps, network
-- Live status of containers, Ollama, wifi watchdog
-- One-click actions: restart services, pull images, compose up/down
-- Native chat panel (direct to Ollama)
-- Quick links to Open WebUI + n8n
-
-### Open WebUI (`/chat/`)
-- Full chat interface with conversation history
-- Model switching, custom system prompts
-- **RAG** over uploaded documents (PDFs, text, etc.)
-- Conversation branching
-- Multiple users (admin-managed)
-
-### n8n (`/flow/`) — the automation engine
-Visual workflow editor. Useful patterns:
-
-| Trigger | Example |
-|---|---|
-| **Cron** | Daily at 8am → call Ollama → email summary |
-| **Webhook** | HTTP POST → Ollama → return response (build your own API) |
-| **IMAP** | New email → LLM summarize → forward to Slack |
-| **File watch** | New file in folder → LLM extract → write structured output |
-| **RSS** | New article → LLM summarize → push to Telegram |
-
-Full template library: `/flow/` → Templates.
+- A Linux host with Docker + Docker Compose
+- An Ollama install on the host (`curl -fsSL https://ollama.com/install.sh | sh`) reachable at `host.docker.internal:11434`
+- A domain you control on Cloudflare (for DNS-01 TLS)
+- *Optional:* an NVIDIA GPU (the dashboard container uses `runtime: nvidia` for GPU-accelerated tool calls if available — comment those lines out if you don't have one)
 
 ---
 
-## Talking to Ollama Directly
+## Setup
 
 ```bash
-# From server shell or any tailnet device:
-curl -s http://100.117.98.52:11434/api/generate \
+git clone https://github.com/0J33/agent.ojee.net.git ~/stack
+cd ~/stack/stack
+cp .env.example .env
+vim .env            # fill in domains, ACME email, Cloudflare token, etc.
+```
+
+Then point your DNS at the host. Four `A`/`AAAA` (or `CNAME`) records — whatever you put in `*_DOMAIN`:
+
+```
+agent.example.com        → <BIND_IP>
+chat.agent.example.com   → <BIND_IP>
+flow.agent.example.com   → <BIND_IP>
+sync.agent.example.com   → <BIND_IP>   (skip if you don't run CouchDB)
+```
+
+Bring it up:
+
+```bash
+docker compose up -d --build
+```
+
+First boot pulls images and runs the Caddy DNS-01 dance with Cloudflare — takes a minute. Watch with `docker compose logs -f caddy`. When the dashboard responds at `https://<DASHBOARD_DOMAIN>/`, set up first-run accounts:
+
+| Service | First-run |
+|---|---|
+| Dashboard | Logs you in with `DASHBOARD_PASSWORD` from `.env` |
+| Open WebUI | First signup becomes admin |
+| n8n | First signup becomes owner |
+
+CouchDB needs a one-time init for Obsidian's CORS/body-size requirements:
+
+```bash
+./couchdb/init.sh obsidian
+```
+
+---
+
+## `.env` reference (full list in `.env.example`)
+
+| Var | What |
+|---|---|
+| `BIND_IP` | IP Caddy listens on. Use your Tailscale IP for tailnet-only access, `0.0.0.0` for public, `127.0.0.1` for loopback. |
+| `ACME_EMAIL` | Email Let's Encrypt registers your certs under. |
+| `CLOUDFLARE_API_TOKEN` | Scoped to *Edit zone DNS* on your domain — needed because the stack uses DNS-01 (so it works even when port 80 isn't publicly reachable). |
+| `DASHBOARD_DOMAIN` / `OPENWEBUI_DOMAIN` / `N8N_DOMAIN` / `COUCHDB_DOMAIN` | Subdomains for each service. Used by Caddy and by the dashboard's quick-links. |
+| `DASHBOARD_BASE_URL` | Public URL the dashboard uses to reference itself in chat answers. Usually `https://$DASHBOARD_DOMAIN`. |
+| `HOST_STACK_PATH` | Absolute host path to this `stack/` directory — mounted into the dashboard at `/host-stack` so the chat can read your `docker-compose.yml`. |
+| `TIMEZONE` | IANA name. Picked up by n8n's scheduler and by the chat agent when interpreting "every day at 9am". |
+| `DASHBOARD_PASSWORD` | Login. Wrap in single quotes if it contains `#`, `$`, or spaces. |
+| `JWT_SECRET` | Signs the dashboard's session tokens. Rotate to invalidate sessions. |
+| `N8N_API_KEY` | From n8n → Settings → n8n API. Lets the dashboard chat create/run/edit workflows. |
+| `LOQ_*` | Optional second Ollama on another machine + a small control HTTP API to start/stop it. Surfaced as the "Loq" tab. |
+| `CODE_AGENT_*` | Optional Claude Code integration. Surfaced as the "Code" tab. |
+| `COUCHDB_USER` / `COUCHDB_PASSWORD` | Obsidian LiveSync auth. |
+
+---
+
+## Talking to Ollama directly
+
+```bash
+curl -s http://<BIND_IP>:11434/api/generate \
   -d '{"model":"qwen2.5-coder:7b","prompt":"Explain X","stream":false}'
 ```
 
-Open WebUI and the dashboard chat both use this API under the hood.
+Both the dashboard and Open WebUI use this API under the hood.
 
 ---
 
-## CLI on the server (aliases already set in `~/.bashrc`)
+## Architecture
 
-```bash
-stackstatus                         # overall stack health
-stackps                             # list containers
-stacklogs                           # tail all compose logs
-stackrestart                        # restart whole stack
-stackupdate                         # pull latest images + restart
-
-~/stack/ops.sh pull qwen2.5:3b      # pull new model
-~/stack/ops.sh rm qwen2.5:3b        # remove model
-~/stack/ops.sh models               # list installed models
-~/stack/ops.sh throttle 5 2         # cap network to 5 Mbps down / 2 up
-~/stack/ops.sh throttle off         # remove cap
-~/stack/ops.sh backup               # run backup now
-~/stack/ops.sh tailnet              # tailscale status
 ```
+                  ┌────────────┐
+client ───TLS───► │   Caddy    │  (DNS-01 cert from Let's Encrypt)
+                  └─────┬──────┘
+        ┌───────────────┼─────────────────┬──────────────┐
+        ▼               ▼                 ▼              ▼
+   dashboard:8080  openwebui:8080     n8n:5678      couchdb:5984
+        │               │                 │
+        └─────► Ollama on host (host.docker.internal:11434)
+```
+
+The dashboard has `docker.sock` mounted so it can act on containers and read host files. **That makes it effectively root for the actions whitelisted in `server.js`** — anyone with the dashboard password can restart the stack. Use a strong password and don't expose the dashboard publicly without thinking about it.
 
 ---
 
-## Trust & Security Model
+## Updating
 
-| Layer | Protection |
-|---|---|
-| **Network** | Tailscale-only. Not reachable from public internet. Caddy bound to tailnet IP `100.117.98.52`, not `0.0.0.0` |
-| **TLS** | Let's Encrypt cert via DNS-01 (Cloudflare). Auto-renews |
-| **Dashboard auth** | Password → 30-day JWT |
-| **Docker power** | Dashboard has mounted `docker.sock` = effectively root on the host for whitelisted actions in `server.js` |
-| **Container isolation** | All services in Docker; can only do what their env/mounts allow |
-| **Updates** | `unattended-upgrades` handles Zorin security patches automatically |
+```bash
+cd ~/stack
+git pull
+docker compose pull
+docker compose up -d --build
+```
 
-**Implication:** Anyone with your dashboard password can restart/stop services on the host. Use a strong password.
+The dashboard frontend is plain HTML/JS in `dashboard/public/` and the backend is `dashboard/server.js` (Express) — `--build` picks them up.
 
 ---
 
-## File Locations
+## Common knobs
 
-```
-/home/ojee/stack/
-├── docker-compose.yml
-├── .env                          # DASHBOARD_PASSWORD, JWT_SECRET, CLOUDFLARE_API_TOKEN
-├── nginx.conf                    # (currently unused)
-├── caddy/
-│   ├── Caddyfile                 # routing + TLS config
-│   └── Dockerfile                # Caddy + Cloudflare DNS plugin
-├── dashboard/
-│   ├── Dockerfile
-│   ├── server.js                 # backend (Express)
-│   ├── package.json
-│   └── public/                   # frontend (vanilla JS)
-├── ops.sh                        # CLI helper
-├── backup.sh                     # backup script (hourly cron)
-├── install-nvidia.sh             # run ONCE after model pull finishes
-└── backup.log                    # last backup output
+**Change the dashboard password.** Edit `.env`, then `docker compose up -d dashboard`.
 
-/media/ojee/NVME/backups/stack/      # backup destination (keeps last 14)
-/tmp/ollama-pull.log                 # live model pull progress
-/tmp/compose-up.log                  # last compose up output
-/usr/local/bin/net-throttle          # throttle helper (called by ops.sh)
-/usr/local/bin/wifi-watchdog.sh      # runs every 30s via systemd timer
-/etc/NetworkManager/conf.d/default-wifi-powersave-on.conf
-/etc/modprobe.d/iwlwifi.conf         # disables iwlwifi power saving
-/etc/systemd/system/ollama.service
-/etc/systemd/system/wifi-watchdog.{service,timer}
-/etc/logrotate.d/agent
-```
+**Bind Caddy to a different IP.** Edit `BIND_IP` in `.env` and `docker compose up -d caddy`.
 
----
+**Disable a service** (e.g. you don't use Obsidian). Comment out its `service:` block in `docker-compose.yml` *and* its `{...}` site block in `caddy/Caddyfile`.
 
-## Common Tasks
-
-### Change the dashboard password
-
-```bash
-vim ~/stack/.env           # edit DASHBOARD_PASSWORD
-docker compose -f ~/stack/docker-compose.yml restart dashboard
-```
-
-### Pull a new Ollama model
-
-```bash
-~/stack/ops.sh pull llama3.2:3b
-```
-
-Or, with throttle during slow internet:
-
-```bash
-~/stack/ops.sh throttle 5 2
-~/stack/ops.sh pull llama3.2:3b
-~/stack/ops.sh throttle off
-```
-
-### View live logs
-
-```bash
-stacklogs             # all services
-docker compose logs -f caddy
-docker compose logs -f dashboard
-docker compose logs -f openwebui
-docker compose logs -f n8n
-journalctl -u ollama -f
-```
-
-### Restore from backup
-
-```bash
-# openwebui
-docker run --rm -v stack_openwebui_data:/dst -v /media/ojee/NVME/backups/stack:/src alpine \
-  sh -c "cd /dst && tar xzf /src/stack_openwebui_data-YYYYMMDD-HHMM.tar.gz"
-
-# n8n
-docker run --rm -v stack_n8n_data:/dst -v /media/ojee/NVME/backups/stack:/src alpine \
-  sh -c "cd /dst && tar xzf /src/stack_n8n_data-YYYYMMDD-HHMM.tar.gz"
-```
-
-### Enable the NVIDIA GPU (one-time)
-
-Wait until the active Ollama model pull is done, then:
-
-```bash
-~/stack/install-nvidia.sh
-sudo reboot
-```
-
-Expected speedup: 3–5× for Qwen2.5-Coder 7B on the MX250 (4GB VRAM, partial offload).
-
-### Open a temp public URL (single file / demo)
-
-```bash
-sudo tailscale funnel 443    # exposes 443 publicly; run again with `off` to disable
-```
-
-Use sparingly — this removes the tailnet-only protection.
+**Pull a new Ollama model.** `ollama pull <name>` on the host — it shows up in the dashboard + Open WebUI automatically.
 
 ---
 
@@ -217,63 +143,14 @@ Use sparingly — this removes the tailnet-only protection.
 
 | Symptom | Check |
 |---|---|
-| `agent.ojee.net` won't resolve | Tailscale connected? `tailscale ip -4` should return a 100.x address |
-| Cert warning in browser | Caddy logs: `docker compose logs caddy`. Check DNS-01 is working |
-| `/chat/` shows 502 | `docker compose ps` → is openwebui healthy? `docker compose logs openwebui` |
-| `/flow/` redirects wrong | n8n needs `N8N_PATH=/flow/` env — already set |
-| Chat says "no model" | `ollama list` — did the pull finish? `tail /tmp/ollama-pull.log` |
-| Chat is slow | Run `install-nvidia.sh` + reboot |
-| Wifi dropped but services still up | Wifi watchdog reconnects every 30s automatically |
-| Whole server rebooted | All services auto-start (restart: unless-stopped + systemd enable) |
-| Can't SSH in | Check wifi; if dead, physical access needed |
+| Cert warning in browser | `docker compose logs caddy`. Cloudflare token wrong? Token not scoped to the right zone? |
+| `502 Bad Gateway` on a subdomain | The upstream container isn't healthy. `docker compose ps`, then `docker compose logs <service>`. |
+| Dashboard chat says "no model" | `ollama list` on the host — pull at least one model. |
+| n8n workflow URLs in chat point to the wrong domain | Check `N8N_DOMAIN` and `DASHBOARD_BASE_URL` in `.env`. |
+| CouchDB returns "unauthorized" from Obsidian | The plugin's username/password must match `.env`. |
 
 ---
 
-## Updating the Stack
+## License
 
-```bash
-cd ~/stack
-git pull     # if version-controlled
-docker compose pull
-docker compose up -d --build
-```
-
-Dashboard source lives in `~/stack/dashboard/` — rebuild triggers on compose up with `--build`.
-
----
-
-## Rotating Secrets
-
-The initial Cloudflare API token passed through AI conversation history. To rotate:
-
-1. Delete the old token: https://dash.cloudflare.com/profile/api-tokens → delete
-2. Create a new one (same "Edit zone DNS" template, scoped to `ojee.net`)
-3. Edit `~/stack/.env` → update `CLOUDFLARE_API_TOKEN=...`
-4. `docker compose restart caddy`
-
----
-
-## Architecture
-
-```
-                            Internet
-                               │
-                     (no inbound, Caddy not exposed)
-                               │
-Tailnet device ──wireguard──► server (100.117.98.52)
-                               │
-                       ┌───────┴───────┐
-                       │   Caddy :443  │   (LE cert for agent.ojee.net)
-                       │   auto-routes │
-                       └───────┬───────┘
-              ┌────────────────┼────────────────┐
-              │                │                │
-       dashboard:8080    openwebui:8080     n8n:5678
-              │                │                │
-              └────────┬───────┴────────────────┘
-                       │
-              Ollama on host (port 11434)
-              Model: qwen2.5-coder:7b
-```
-
-Nginx is currently unused (was the tailnet-serve path). Safe to remove from compose later.
+MIT.

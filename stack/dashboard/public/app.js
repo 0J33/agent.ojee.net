@@ -216,6 +216,7 @@ const logout = () => { token = ''; localStorage.removeItem('auth_token'); render
 const HISTORY_LEN = 60;
 let state = {
   view: location.hash.replace(/^#\/?/, '') || 'dashboard',  // mobile section
+  config: { dashboardBaseUrl: '', openwebuiDomain: '', n8nDomain: '', couchdbDomain: '' },
   stats: null, services: null, models: [], pull: [],
   history: { cpu: [], ram: [], swap: [], net_in: [], net_out: [], disk_read: [], disk_write: [] },
   chat: [], chatModel: '', chatBusy: false, chatStatus: null,
@@ -591,20 +592,20 @@ const panelActions = () => el('div', { class: 'panel', 'data-panel': 'actions' }
   el('div', { class: 'panel-section' }, 'Model pull'),
   el('div', { class: 'pull-box' }, (state.pull || []).join('\n') || 'no active pull'),
   el('div', { class: 'panel-section' }, 'Quick links'),
-  el('a', { class: 'link-card', href: 'https://chat.agent.ojee.net', target: '_blank' },
+  state.config.openwebuiDomain ? el('a', { class: 'link-card', href: `https://${state.config.openwebuiDomain}`, target: '_blank' },
     el('div', { class: 'link-card-title' },
       el('span', {}, 'Open WebUI'),
       el('span', { class: 'link-card-sub' }, 'Full chat with RAG'),
     ),
     ico('arrow', 16),
-  ),
-  el('a', { class: 'link-card', href: 'https://flow.agent.ojee.net', target: '_blank' },
+  ) : null,
+  state.config.n8nDomain ? el('a', { class: 'link-card', href: `https://${state.config.n8nDomain}`, target: '_blank' },
     el('div', { class: 'link-card-title' },
       el('span', {}, 'n8n'),
       el('span', { class: 'link-card-sub' }, 'Workflow automation'),
     ),
     ico('arrow', 16),
-  ),
+  ) : null,
 );
 
 // ─── Chat actions ──────────────────────────────────────────────────────
@@ -1869,6 +1870,12 @@ const refresh = async () => {
 
 // ─── Boot ──────────────────────────────────────────────────────────────
 const boot = async () => {
+  // Load server-side config (domain names, timezone) so the SPA can use
+  // them without hardcoding the operator's specific deployment URLs.
+  try {
+    const r = await fetch('/api/config');
+    if (r.ok) state.config = await r.json();
+  } catch {}
   restoreChat();
   restoreCode();
   restoreLoq();

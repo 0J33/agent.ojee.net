@@ -1,8 +1,10 @@
 {
-  email contact@ojee.net
+  email {$ACME_EMAIL}
 }
 
-# Shared DNS-01 config snippet
+# Shared DNS-01 challenge config — Caddy gets the cert from Let's Encrypt
+# by proving control of the domain via a Cloudflare DNS record, so the
+# stack can run on a tailnet IP without a public port-80 reachable.
 (cf_tls) {
   tls {
     dns cloudflare {env.CLOUDFLARE_API_TOKEN}
@@ -10,15 +12,8 @@
 }
 
 # Dashboard
-agent.ojee.net {
+{$DASHBOARD_DOMAIN} {
   import cf_tls
-  # Redirect legacy paths to the new subdomains (strip the /chat or /flow prefix)
-  handle_path /chat* {
-    redir https://chat.agent.ojee.net{uri} permanent
-  }
-  handle_path /flow* {
-    redir https://flow.agent.ojee.net{uri} permanent
-  }
   reverse_proxy dashboard:8080
   encode gzip
   log {
@@ -30,16 +25,16 @@ agent.ojee.net {
 }
 
 # Open WebUI
-chat.agent.ojee.net {
+{$OPENWEBUI_DOMAIN} {
   import cf_tls
   reverse_proxy openwebui:8080
   encode gzip
 }
 
-# n8n
-flow.agent.ojee.net {
+# n8n.  Serves a custom apple-touch-icon out of the dashboard because
+# n8n doesn't ship one.
+{$N8N_DOMAIN} {
   import cf_tls
-  # Serve a custom apple-touch-icon from the dashboard (n8n doesn't ship one)
   @apple path /apple-touch-icon.png /apple-touch-icon*.png /apple-touch-icon.svg
   handle @apple {
     rewrite * /n8n-apple-touch-icon.png
@@ -51,7 +46,8 @@ flow.agent.ojee.net {
 
 # CouchDB for Obsidian (Self-hosted LiveSync plugin).  LiveSync does
 # attachment streaming, so don't gzip — let CouchDB send raw JSON.
-sync.agent.ojee.net {
+# Comment this block out if you don't run the Obsidian sync backend.
+{$COUCHDB_DOMAIN} {
   import cf_tls
   reverse_proxy couchdb:5984
 }

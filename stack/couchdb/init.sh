@@ -54,7 +54,12 @@ else
   echo "Vault database '$DB' already exists."
 fi
 
-echo "Done.  LiveSync plugin connection URL: https://sync.agent.ojee.net/"
+# Pick up COUCHDB_DOMAIN from the stack's .env so the closing message
+# prints the URL the user should plug into the Obsidian plugin.
+SYNC_URL="https://${COUCHDB_DOMAIN:-$(grep -m1 '^COUCHDB_DOMAIN=' "$(dirname "$0")/../.env" 2>/dev/null | cut -d= -f2- | tr -d '"'"'"' )}"
+[ "$SYNC_URL" = "https://" ] && SYNC_URL="https://<your COUCHDB_DOMAIN>"
+
+echo "Done.  LiveSync plugin connection URL: $SYNC_URL/"
 echo "Database:  $DB"
 echo "Username:  $USER"
 echo "Password:  (from stack .env COUCHDB_PASSWORD)"

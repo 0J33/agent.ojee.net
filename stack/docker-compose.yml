@@ -6,14 +6,20 @@ services:
     dns:
       - 1.1.1.1
       - 8.8.8.8
-    # Bind Caddy only to tailnet IP — prevents access from local wifi network or public internet.
-    # Tailnet IP is stable; if it ever changes, update here and in the Cloudflare CNAME.
+    # Bind Caddy to BIND_IP (defaults to localhost).  Set it to your
+    # Tailscale IP in .env to make the stack tailnet-only, or 0.0.0.0
+    # to expose it publicly.
     ports:
-      - "100.117.98.52:80:80"
-      - "100.117.98.52:443:443"
-      - "100.117.98.52:443:443/udp"
+      - "${BIND_IP:-127.0.0.1}:80:80"
+      - "${BIND_IP:-127.0.0.1}:443:443"
+      - "${BIND_IP:-127.0.0.1}:443:443/udp"
     environment:
       - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN}
+      - ACME_EMAIL=${ACME_EMAIL:-you@example.com}
+      - DASHBOARD_DOMAIN=${DASHBOARD_DOMAIN:-agent.example.com}
+      - OPENWEBUI_DOMAIN=${OPENWEBUI_DOMAIN:-chat.agent.example.com}
+      - N8N_DOMAIN=${N8N_DOMAIN:-flow.agent.example.com}
+      - COUCHDB_DOMAIN=${COUCHDB_DOMAIN:-sync.agent.example.com}
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -25,20 +31,6 @@ services:
       - n8n
       - couchdb
 
-  # Kept for legacy tailnet URL access (tailscale serve → 127.0.0.1:8000)
-  nginx:
-    image: nginx:alpine
-    container_name: nginx
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:8000:80"
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-    depends_on:
-      - dashboard
-      - openwebui
-      - n8n
-
   dashboard:
     build: ./dashboard
     container_name: dashboard
@@ -48,13 +40,18 @@ services:
     environment:
       - DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD:-change-me}
       - JWT_SECRET=${JWT_SECRET:-insecure-default-change-me}
+      - DASHBOARD_BASE_URL=${DASHBOARD_BASE_URL:-https://${DASHBOARD_DOMAIN:-agent.example.com}}
+      - N8N_DOMAIN=${N8N_DOMAIN:-flow.agent.example.com}
+      - OPENWEBUI_DOMAIN=${OPENWEBUI_DOMAIN:-chat.agent.example.com}
+      - COUCHDB_DOMAIN=${COUCHDB_DOMAIN:-sync.agent.example.com}
+      - TIMEZONE=${TIMEZONE:-UTC}
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
       - N8N_BASE_URL=http://n8n:5678
       - N8N_API_KEY=${N8N_API_KEY:-}
-      - CODE_AGENT_URL=${CODE_AGENT_URL:-http://100.81.241.55:7777}
+      - CODE_AGENT_URL=${CODE_AGENT_URL:-}
       - CODE_AGENT_TOKEN=${CODE_AGENT_TOKEN:-}
-      - LOQ_OLLAMA_URL=${LOQ_OLLAMA_URL:-http://100.81.241.55:11434}
-      - LOQ_CONTROL_URL=${LOQ_CONTROL_URL:-http://100.81.241.55:7779}
+      - LOQ_OLLAMA_URL=${LOQ_OLLAMA_URL:-}
+      - LOQ_CONTROL_URL=${LOQ_CONTROL_URL:-}
       - LOQ_CONTROL_TOKEN=${LOQ_CONTROL_TOKEN:-}
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=utility
@@ -64,7 +61,9 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /tmp:/host-tmp:ro
-      - /home/ojee/stack:/host-stack:ro
+      # Host path to this stack/ checkout — the dashboard chat reads
+      # docker-compose.yml etc. from /host-stack inside the container.
+      - ${HOST_STACK_PATH:-./}:/host-stack:ro
       - /:/host:ro
       - dashboard_data:/app/data
 
@@ -77,7 +76,7 @@ services:
     environment:
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
       - WEBUI_AUTH=true
-      - WEBUI_URL=https://chat.agent.ojee.net
+      - WEBUI_URL=https://${OPENWEBUI_DOMAIN:-chat.agent.example.com}
       - ENABLE_RAG_WEB_SEARCH=True
       - RAG_WEB_SEARCH_ENGINE=duckduckgo
       - ENABLE_RAG_LOCAL_WEB_FETCH=True
@@ -98,23 +97,23 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
-      - N8N_HOST=flow.agent.ojee.net
+      - N8N_HOST=${N8N_DOMAIN:-flow.agent.example.com}
       - N8N_PORT=5678
       - N8N_PROTOCOL=https
-      - N8N_EDITOR_BASE_URL=https://flow.agent.ojee.net
-      - WEBHOOK_URL=https://flow.agent.ojee.net
+      - N8N_EDITOR_BASE_URL=https://${N8N_DOMAIN:-flow.agent.example.com}
+      - WEBHOOK_URL=https://${N8N_DOMAIN:-flow.agent.example.com}
       - NODE_ENV=production
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
       - N8N_SECURE_COOKIE=false
-      - GENERIC_TIMEZONE=Africa/Cairo
-      - TZ=Africa/Cairo
+      - GENERIC_TIMEZONE=${TIMEZONE:-UTC}
+      - TZ=${TIMEZONE:-UTC}
     volumes:
       - n8n_data:/home/node/.n8n
 
   # Obsidian vault backend — Self-hosted LiveSync plugin replicates
-  # against CouchDB over HTTPS at sync.agent.ojee.net.  The required
-  # CORS + max-body-size tweaks are applied at runtime by ./couchdb/init.sh
-  # via the HTTP config API, not via a mounted local.ini.
+  # against CouchDB over HTTPS at $COUCHDB_DOMAIN.  CORS + max-body-size
+  # tweaks are applied at runtime by ./couchdb/init.sh via the HTTP
+  # config API, not via a mounted local.ini.
   couchdb:
     image: couchdb:3
     container_name: couchdb

@@ -20,6 +20,13 @@ const N8N_BASE = process.env.N8N_BASE_URL || 'http://n8n:5678';
 const N8N_API_KEY = process.env.N8N_API_KEY || '';
 const CODE_AGENT_URL = process.env.CODE_AGENT_URL || '';
 const CODE_AGENT_TOKEN = process.env.CODE_AGENT_TOKEN || '';
+const DASHBOARD_BASE_URL = (process.env.DASHBOARD_BASE_URL || 'https://agent.example.com').replace(/\/+$/, '');
+const DASHBOARD_HOST = (() => { try { return new URL(DASHBOARD_BASE_URL).host; } catch { return 'this server'; } })();
+const TIMEZONE = process.env.TIMEZONE || 'UTC';
+const N8N_DOMAIN = process.env.N8N_DOMAIN || '';
+const OPENWEBUI_DOMAIN = process.env.OPENWEBUI_DOMAIN || '';
+const COUCHDB_DOMAIN = process.env.COUCHDB_DOMAIN || '';
+const N8N_FLOW_BASE = N8N_DOMAIN ? `https://${N8N_DOMAIN}` : `${DASHBOARD_BASE_URL}/flow`;
 
 const n8nApi = async (path, opts = {}) => {
   if (!N8N_API_KEY) throw new Error('N8N_API_KEY not set in .env — generate one in n8n Settings → n8n API');
@@ -37,6 +44,19 @@ const app = express();
 app.use(express.json({ limit: '2mb' }));
 
 // ─── Auth ─────────────────────────────────────────────────────────────────
+// Public-ish endpoint so the SPA can discover its configured domains
+// without having them hardcoded.  No auth — these are display URLs the
+// user already needs to type into a browser anyway.
+app.get('/api/config', (req, res) => {
+  res.json({
+    dashboardBaseUrl: DASHBOARD_BASE_URL,
+    openwebuiDomain: OPENWEBUI_DOMAIN,
+    n8nDomain: N8N_DOMAIN,
+    couchdbDomain: COUCHDB_DOMAIN,
+    timezone: TIMEZONE,
+  });
+});
+
 app.post('/api/auth', (req, res) => {
   if (req.body.password !== PASSWORD) return res.status(401).json({ error: 'invalid' });
   const token = jwt.sign({ sub: 'user' }, JWT_SECRET, { expiresIn: '30d' });
@@ -275,7 +295,7 @@ const TOOLS = [
   { type: 'function', function: { name: 'get_stats', description: 'Live system stats: CPU %, memory used/total, disk usage, CPU temperature, GPU info if present.', parameters: { type: 'object', properties: {} } } },
   { type: 'function', function: { name: 'get_services', description: 'Docker compose services in the agent stack and their running state.', parameters: { type: 'object', properties: {} } } },
   { type: 'function', function: { name: 'list_models', description: 'Ollama models installed locally.', parameters: { type: 'object', properties: {} } } },
-  { type: 'function', function: { name: 'read_file', description: 'Read a text file on the server host by absolute path (e.g. /etc/os-release, /home/ojee/stack/.env — but .env is sensitive). 50k char cap.', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } } },
+  { type: 'function', function: { name: 'read_file', description: 'Read a text file on the server host by absolute path (e.g. /etc/os-release, or /host-stack/docker-compose.yml — but never read .env files, they are sensitive). 50k char cap.', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } } },
   { type: 'function', function: { name: 'list_dir', description: 'List a directory on the server host by absolute path. Returns [{name, type}].', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } } },
   { type: 'function', function: { name: 'n8n_list_workflows', description: 'List all n8n workflows. Returns array of {id, name, active}.', parameters: { type: 'object', properties: {} } } },
   { type: 'function', function: { name: 'n8n_get_workflow', description: 'Get a single n8n workflow in full (nodes, connections, settings).', parameters: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } } },
@@ -323,7 +343,7 @@ const TOOLS = [
         cron: { type: 'string', description: 'For schedule: standard 5-field cron expression (min hour day-of-month month day-of-week). Example: "55 2 * * *" = daily at 02:55, "0 9 * * 1-5" = 9am every weekday. Use this for anything more complex than at_time.' },
         every_hours: { type: 'number', description: 'For schedule: interval in hours (e.g. 1 for hourly). Use only for true intervals like "every 4 hours" — NOT for "at 4 AM".' },
         every_minutes: { type: 'number', description: 'For schedule: interval in minutes. Use only for true intervals like "every 15 minutes" — NOT for "at H:55".' },
-        timezone: { type: 'string', description: 'IANA timezone name for schedule interpretation, e.g. "Africa/Cairo", "America/New_York", "Europe/London". Without this, at_time/cron run in UTC. ALWAYS set this when the user mentions a city/country/timezone.' },
+        timezone: { type: 'string', description: 'IANA timezone name for schedule interpretation, e.g. "America/New_York", "Europe/London", "Asia/Tokyo". Without this, at_time/cron run in UTC. ALWAYS set this when the user mentions a city/country/timezone.' },
         webhook_path: { type: 'string', description: 'For webhook: URL path (e.g. "my-hook")' },
         webhook_method: { type: 'string', enum: ['GET', 'POST'], description: 'For webhook: HTTP method, default POST' },
         steps: {
@@ -990,7 +1010,7 @@ const runTool = async (name, args) => {
         },
       })
     });
-    return { id: r.id, name: r.name, active: r.active, url: `https://agent.ojee.net/flow/workflow/${r.id}`, steps: nodes.length };
+    return { id: r.id, name: r.name, active: r.active, url: `${N8N_FLOW_BASE}/workflow/${r.id}`, steps: nodes.length };
   }
   throw new Error(`unknown tool: ${name}`);
 };
@@ -1031,7 +1051,7 @@ const INTEG_RECIPES = {
   Required: database [REQ] (32-char UUID from DB URL — DB must be SHARED with the Notion integration via DB → Connections), title [REQ]
   Optional: content [OPT]`,
   github: `- github — create an issue (default):
-    { kind: "github", owner: "0J33", repo: "agent.ojee.net", title: "Bug X", content: "Repro..." }
+    { kind: "github", owner: "octocat", repo: "hello-world", title: "Bug X", content: "Repro..." }
   Required: owner [REQ], repo [REQ], title [REQ]
   Optional: content [OPT, becomes issue body], operation [OPT, default "create"], resource [OPT, default "issue"]`,
   clickup: `- clickup — create a task:
@@ -1079,7 +1099,7 @@ const buildSystemPrompt = async () => {
   const missingKinds = Object.keys(INTEG_RECIPES).filter(k => !integs[k]);
   const missingList = missingKinds.length ? missingKinds.join(', ') : '(none)';
 
-  return `You are an assistant on the user's self-hosted server (agent.ojee.net). You HAVE tools. You HAVE internet via web_search. Use them.
+  return `You are an assistant on the user's self-hosted server (${DASHBOARD_HOST}). You HAVE tools. You HAVE internet via web_search. Use them.
 
 ### HARD RULES — obey above all else
 
@@ -1095,14 +1115,14 @@ const buildSystemPrompt = async () => {
 
 - web_search(query), web_fetch(url) — internet. USE for current time, weather, prices, news, people, places, entities, institutions, requirements, anything that could have changed.
 - get_stats() / get_services() / list_models() — this server.
-- read_file(path) / list_dir(path) — host filesystem, read-only. Stack at /home/ojee/stack. Never read .env files.
+- read_file(path) / list_dir(path) — host filesystem, read-only. The stack source is mounted at /host-stack; the host root at /host. Never read .env files.
 - n8n_quick_workflow / n8n_list_workflows / n8n_activate_workflow / n8n_get_workflow / n8n_create_workflow / n8n_update_workflow / n8n_deactivate_workflow — build and manage automations.
 - n8n_run_workflow / n8n_list_executions / n8n_get_execution / n8n_patch_node — TEST and DEBUG and EDIT workflows. After building or modifying a workflow, you can verify it works without asking the user to click anything in n8n.
 
 ### When to use each tool
 
 - Asked for current time/weather/news/price/facts about anything in the world → web_search IMMEDIATELY.
-- Asked about a specific URL or domain ("ojee.net", "github.com/x/y") → web_fetch that URL.
+- Asked about a specific URL or domain ("acme.com", "github.com/x/y") → web_fetch that URL.
 - Asked about the server (CPU, services, models, files) → the relevant local tool.
 - Asked for math, code, definitions, or timeless facts → answer from memory.
 - Asked to build/run automation → n8n_quick_workflow (or lower-level n8n_* tools).
@@ -1113,7 +1133,7 @@ Tool results may contain Title, description, og:description, Content sections. T
 
 ### Preferred free no-auth APIs (use web_fetch — and use these same URLs inside http steps in workflows)
 
-For the common asks below, skip web_search and hit these endpoints directly — they return clean JSON, require no keys, work from Egypt, and are great building blocks inside n8n http steps.
+For the common asks below, skip web_search and hit these endpoints directly — they return clean JSON, require no keys, and are great building blocks inside n8n http steps.
 
 Weather & places
 - Weather / forecast: https://api.open-meteo.com/v1/forecast?latitude=X&longitude=Y&current=temperature_2m,weather_code,wind_speed_10m&timezone=auto
@@ -1174,7 +1194,7 @@ When the user DOES ask for a workflow:
 - Credentials are ALREADY attached by the server. NEVER ask the user for API keys, webhook URLs, bot tokens, OAuth logins, or IDs that aren't specific to their task.
 - If the user doesn't specify details ("make a basic workflow"), pick sensible defaults (trigger "manual", one "set" step with a demo value) and build it — do NOT ask for clarification.
 - After building, TEST THE WORKFLOW (see "Test + debug" below) before reporting it as done.
-- Report the URL: https://agent.ojee.net/flow/workflow/<id> — and ask before activating.
+- Report the URL: ${N8N_FLOW_BASE}/workflow/<id> — and ask before activating.
 
 ### Test + debug + fix loop (REQUIRED after building or modifying a workflow)
 
@@ -1196,12 +1216,12 @@ Common failures and fixes:
     • cron: "min hr dom mon dow"  →  any cron pattern. Use for weekdays-only ("0 9 * * 1-5") or non-daily.
     • every_minutes: N  →  fires every N minutes from activation. Use ONLY for true intervals like "every 15 minutes".
     • every_hours: N    →  fires every N hours from activation. Use ONLY for true intervals like "every 4 hours".
-  ALWAYS set timezone (IANA name like "Africa/Cairo", "America/New_York") whenever the user mentions a city or country, otherwise the schedule fires in UTC.
+  ALWAYS set timezone (IANA name like "America/New_York", "Europe/London", "Asia/Tokyo") whenever the user mentions a city or country, otherwise the schedule fires in UTC.  The server's default zone is "${TIMEZONE}".
 - webhook — fires on HTTP request to /webhook/<path>. Fields: webhook_path, webhook_method.
 - manual — user clicks "Execute Workflow" in n8n (great for testing).
 
 Schedule examples:
-- "remind me at 2:55 AM Cairo time daily" → trigger:"schedule", at_time:"02:55", timezone:"Africa/Cairo"
+- "remind me at 2:55 AM London time daily" → trigger:"schedule", at_time:"02:55", timezone:"Europe/London"
 - "every weekday at 9 AM in NYC" → trigger:"schedule", cron:"0 9 * * 1-5", timezone:"America/New_York"
 - "ping a URL every 15 minutes" → trigger:"schedule", every_minutes:15  (no time-of-day, no timezone needed)
 
@@ -1641,7 +1661,7 @@ app.post('/api/loq/chat', auth, async (req, res) => {
     numCtx: 2048, ...(tooBigForFullGpu ? {} : { numGpu: 99 }), numBatch: 128, timeoutMs: 120_000,
     allowedTools: [], maxToolResultLen: 3000,
     textToolAllow: ['web_search', 'web_fetch', 'get_stats', 'get_services', 'list_models', 'list_dir', 'read_file'],
-    systemPrompt: `You are an assistant on the user's self-hosted server (agent.ojee.net).
+    systemPrompt: `You are an assistant on the user's self-hosted server (${DASHBOARD_HOST}).
 
 ### HARD RULES
 1. You HAVE web_fetch and web_search. Call them for current time, weather, prices, news, scores, or anything that could have changed.
@@ -1658,16 +1678,16 @@ web_search({"query":"..."})
 get_stats({})                  — CPU %, memory, disk, temperature, GPU
 get_services({})               — docker compose services and their state
 list_models({})                — Ollama models installed on this server
-list_dir({"path":"/abs/path"}) — directory listing (stack is at /home/ojee/stack)
+list_dir({"path":"/abs/path"}) — directory listing (stack source is at /host-stack)
 read_file({"path":"/abs/path"}) — read a text file (never read .env)
 
 ### PREFERRED URLs for web_fetch (return clean JSON — use these over web_search):
-- Current time: https://timeapi.io/api/Time/current/zone?timeZone=<IANA zone, e.g. America/Los_Angeles, Africa/Cairo, Asia/Tokyo>
+- Current time: https://timeapi.io/api/Time/current/zone?timeZone=<IANA zone, e.g. America/Los_Angeles, Europe/London, Asia/Tokyo>
 - City → lat/lon: https://geocoding-api.open-meteo.com/v1/search?name=<CITY>&count=1
 - Weather (needs lat/lon first): https://api.open-meteo.com/v1/forecast?latitude=<LAT>&longitude=<LON>&current=temperature_2m,weather_code,wind_speed_10m&timezone=auto
 
-Example flow for "time in Cairo":
-Turn 1 output: web_fetch({"url":"https://timeapi.io/api/Time/current/zone?timeZone=Africa/Cairo"})
+Example flow for "time in Tokyo":
+Turn 1 output: web_fetch({"url":"https://timeapi.io/api/Time/current/zone?timeZone=Asia/Tokyo"})
 Then read the "time" field from the JSON result and answer.
 
 For math, code, definitions, or timeless facts — answer from memory.`,
