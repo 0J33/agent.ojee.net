@@ -202,7 +202,7 @@ const renderLogin = () => {
     },
   },
     brandIcon('login-logo'),
-    el('div', { class: 'login-title' }, 'AGENT'),
+    el('div', { class: 'login-title' }, 'agent', el('span', { class: 'brand-dot' }, '.'), 'ojee'),
     input,
     el('button', { type: 'submit', class: 'login-btn' }, 'Authenticate'),
     err,
@@ -357,7 +357,7 @@ const renderToasts = () => {
 
 // ─── Header ────────────────────────────────────────────────────────────
 const renderHeader = () => el('div', { class: 'header' },
-  el('div', { class: 'brand-wrap' }, brandIcon(), el('span', { class: 'brand' }, 'AGENT')),
+  el('div', { class: 'brand-wrap' }, brandIcon(), el('span', { class: 'brand' }, 'agent', el('span', { class: 'brand-dot' }, '.'), 'ojee')),
   el('div', { class: 'header-right' },
     el('span', { class: state.stats ? 'status-pill' : 'status-pill offline' }, state.stats ? 'Online' : 'Offline'),
     el('button', { class: 'btn ghost icon', onclick: logout, title: 'Logout' }, ico('logout', 16)),

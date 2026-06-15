@@ -1,43 +1,49 @@
-/* ─── Design tokens (monochrome cyan palette) ───────────────────────────── */
+/* ─── Design tokens — ojee-ui (pitvisor/design-system/ojee-ui.css) ──────────
+   cyan-on-near-black · all-mono · zero-radius · single accent.
+   The existing token names are kept and remapped to the design-system
+   palette, so every rule below inherits the new look. Strict overrides
+   live in the "ojee-ui compliance layer" at the end of this file. */
 :root {
-  /* Surfaces — pure black + grey derivatives */
-  --bg:           #000000;
-  --bg-elev-1:    #0a0a0a;
-  --bg-elev-2:    #141414;
-  --bg-elev-3:    #1c1c1c;
-  --surface-glass: rgba(12, 12, 12, 0.78);
-  --border:       #1f1f1f;
-  --border-strong: #2e2e2e;
+  /* Surfaces — near-black + warm-grey derivatives */
+  --bg:           #0e0d0a;
+  --bg-elev-1:    #131210;
+  --bg-elev-2:    #181712;
+  --bg-elev-3:    #1f1d18;
+  --surface-glass: rgba(14, 13, 10, 0.88);
+  --border:       rgba(232, 230, 223, 0.10);
+  --border-strong: #2a2823;
   --border-accent: rgba(0, 255, 255, 0.35);
 
-  /* Text — white + greys */
-  --text:         #ffffff;
-  --text-muted:   #b3b3b3;
-  --text-dim:     #808080;
-  --text-faint:   #4d4d4d;
+  /* Text — cream ink scale */
+  --text:         #e8e6df;
+  --text-muted:   #a8a59c;
+  --text-dim:     #8a8478;
+  --text-faint:   #5a564d;
 
-  /* Brand — bright cyan + dim cyan only */
+  /* Brand — single cyan accent */
   --accent:       #00ffff;
   --accent-bright:#00ffff;
-  --accent-dim:   rgba(0, 255, 255, 0.16);
-  --accent-dark:  #00aaaa;
+  --accent-dim:   rgba(0, 255, 255, 0.08);
+  --accent-dark:  #008b8b;
+  --accent-03:    rgba(0, 255, 255, 0.03);
 
-  /* Semantic states: green for active/ok, red for down/danger, cyan for info,
-     dim cyan for warn (gauge threshold). */
-  --success:      #00ff88;
-  --success-dim:  rgba(0, 255, 136, 0.14);
-  --warn:         #00aaaa;
-  --warn-dim:     rgba(0, 170, 170, 0.18);
-  --danger:       #ff4444;
-  --danger-dim:   rgba(255, 68, 68, 0.12);
-  --info:         #00ffff;
-  --info-dim:     rgba(0, 255, 255, 0.14);
+  /* Semantic states (design-system palette) */
+  --success:      #88aa44;
+  --success-dim:  rgba(136, 170, 68, 0.14);
+  --warn:         #ffd700;
+  --warn-dim:     rgba(255, 215, 0, 0.16);
+  --danger:       #ff0000;
+  --danger-dim:   rgba(255, 0, 0, 0.10);
+  --info:         #88ccff;
+  --info-dim:     rgba(136, 204, 255, 0.14);
   --user-msg:     rgba(0, 255, 255, 0.06);
   --user-border:  rgba(0, 255, 255, 0.4);
 
-  /* Typography */
-  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  /* Typography — all-mono */
+  --font-sans:  'Geist Mono', ui-monospace, Menlo, monospace;
+  --font-mono:  'Geist Mono', ui-monospace, Menlo, monospace;
+  --font-pixel: 'Major Mono Display', ui-monospace, monospace;
+  --font-hud:   'Departure Mono', 'Geist Mono', ui-monospace, monospace;
 
   /* Spacing scale */
   --sp-1: 4px;
@@ -48,11 +54,11 @@
   --sp-6: 24px;
   --sp-8: 32px;
 
-  /* Radii */
-  --r-sm: 6px;
-  --r-md: 10px;
-  --r-lg: 14px;
-  --r-xl: 18px;
+  /* Radii — zero (design-system mandate) */
+  --r-sm: 0;
+  --r-md: 0;
+  --r-lg: 0;
+  --r-xl: 0;
 
   /* Shadows */
   --shadow-1: 0 1px 2px rgba(0,0,0,0.6);
@@ -881,3 +887,84 @@ a { color: var(--accent); text-decoration: none; }
   .chat-log::-webkit-scrollbar { display: none; }
   .chat-log { scrollbar-width: none; }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   ojee-ui compliance layer — strict design-system enforcement.
+   Appended last so it wins over the rules above. Structure is unchanged;
+   this enforces the cyan-on-near-black, all-mono, zero-radius look.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* all-mono body on the 18px dot-grid surface */
+body {
+  font-family: var(--font-mono);
+  background-color: var(--bg);
+  background-image: radial-gradient(rgba(232, 230, 223, 0.06) 1px, transparent 1px);
+  background-size: 18px 18px;
+}
+
+/* zero-radius mandate — SVG (gauges, sparklines, icons) left circular */
+*:not(svg):not(svg *) { border-radius: 0 !important; }
+*:not(svg)::before, *:not(svg)::after { border-radius: 0 !important; }
+
+::selection { background: var(--accent); color: #000; }
+a { color: var(--text-muted); }
+a:hover { color: var(--accent); }
+
+/* buttons → uppercase tracked mono; primary inverts on hover */
+.btn { text-transform: uppercase; letter-spacing: 1.5px; font-weight: 700; font-family: var(--font-mono); }
+.btn.icon { letter-spacing: 0; }
+.btn.primary { color: #000; }
+.btn.primary:hover:not(:disabled) { background: transparent; color: var(--accent); border-color: var(--accent); }
+.login-btn { text-transform: uppercase; letter-spacing: 2px; font-family: var(--font-mono); }
+.login-btn:hover { background: transparent; color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+
+/* inputs → accent focus + faint cyan tint */
+.login-input:focus, .chat-input:focus, .chat-select:focus {
+  border-color: var(--accent);
+  background: var(--accent-03);
+}
+
+/* brand → Major Mono logo with accent dot (nav-logo pattern) */
+.brand {
+  font-family: var(--font-pixel);
+  text-transform: lowercase;
+  letter-spacing: 0.04em;
+  font-weight: 400;
+  color: var(--text);
+}
+.brand-dot { color: var(--accent); }
+.login-title {
+  font-family: var(--font-pixel);
+  text-transform: lowercase;
+  letter-spacing: 0.04em;
+  font-weight: 400;
+  background: none;
+  -webkit-text-fill-color: var(--text);
+  color: var(--text);
+}
+.login-title .brand-dot { -webkit-text-fill-color: var(--accent); color: var(--accent); }
+
+/* status pill → square hairline badge, hud type, square dot */
+.status-pill {
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  color: var(--success);
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  font-weight: 700;
+  font-family: var(--font-hud);
+}
+.status-pill.offline { color: var(--danger); }
+
+.panel-head { font-family: var(--font-mono); }
+
+/* chat chips → on-palette outlined squares */
+.chip-tool   { background: var(--bg-elev-2); color: var(--info); border-color: var(--border); }
+.chip-status { background: var(--bg-elev-2); color: var(--warn); border-color: var(--border); }
+.chat-mode-btn.active { background: var(--accent); color: #000; }
+
+/* cyan scrollbar */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--accent); border: none; }
+::-webkit-scrollbar-thumb:hover { background: var(--accent); }
