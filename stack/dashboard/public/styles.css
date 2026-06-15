@@ -968,3 +968,24 @@ a:hover { color: var(--accent); }
 ::-webkit-scrollbar-track { background: var(--bg); }
 ::-webkit-scrollbar-thumb { background: var(--accent); border: none; }
 ::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+
+/* gauges → match design-system .gauge exactly: dark track, butt caps,
+   accent fill with glow, threshold warn/err, mono value + hud label */
+.gauge .gauge-track { stroke: var(--bg-elev-2); }
+.gauge .gauge-fill {
+  stroke: var(--accent);
+  stroke-linecap: butt;
+  filter: drop-shadow(0 0 4px rgba(0, 255, 255, 0.5));
+}
+.gauge.warn .gauge-fill { stroke: var(--warn); filter: drop-shadow(0 0 4px rgba(255, 215, 0, 0.4)); }
+.gauge.danger .gauge-fill { stroke: var(--danger); filter: drop-shadow(0 0 4px rgba(255, 0, 0, 0.4)); }
+.gauge .gauge-text { fill: var(--text); font-family: var(--font-mono); }
+.gauge .gauge-label { font-family: var(--font-hud); letter-spacing: 0.15em; }
+
+/* mobile header → de-cramp: tighter gaps, drop secondary text */
+@media (max-width: 700px) {
+  .header { padding: 10px 14px; gap: 8px; }
+  .brand { font-size: 0.92rem; letter-spacing: 0.02em; }
+  .brand-sub { display: none; }
+  .header-right { gap: 8px; }
+}

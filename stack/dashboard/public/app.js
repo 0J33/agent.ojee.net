@@ -399,7 +399,7 @@ const gaugeSvg = (pct, temp) => {
   return `<svg viewBox="0 0 76 76" width="76" height="76">
     <circle class="gauge-track" cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke-width="6"/>
     <circle class="gauge-fill" cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke-width="6"
-      stroke-dasharray="${dash} ${circ}" stroke-linecap="round"
+      stroke-dasharray="${dash} ${circ}" stroke-linecap="butt"
       transform="rotate(-90 ${cx} ${cy})"/>
     <text class="gauge-text${pctCls}" x="50%" y="${pctY}" dominant-baseline="middle" text-anchor="middle">${Math.round(pct)}%</text>
     ${tempText}
