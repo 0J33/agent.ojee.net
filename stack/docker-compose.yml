@@ -17,9 +17,11 @@ services:
       - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN}
       - ACME_EMAIL=${ACME_EMAIL:-you@example.com}
       - DASHBOARD_DOMAIN=${DASHBOARD_DOMAIN:-agent.example.com}
-      - OPENWEBUI_DOMAIN=${OPENWEBUI_DOMAIN:-chat.agent.example.com}
       - N8N_DOMAIN=${N8N_DOMAIN:-flow.agent.example.com}
       - COUCHDB_DOMAIN=${COUCHDB_DOMAIN:-sync.agent.example.com}
+      - ODYSSEUS_DOMAIN=${ODYSSEUS_DOMAIN:-odysseus.agent.example.com}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -27,7 +29,6 @@ services:
       - caddy_logs:/var/log/caddy
     depends_on:
       - dashboard
-      - openwebui
       - n8n
       - couchdb
 
@@ -42,20 +43,11 @@ services:
       - JWT_SECRET=${JWT_SECRET:-insecure-default-change-me}
       - DASHBOARD_BASE_URL=${DASHBOARD_BASE_URL:-https://${DASHBOARD_DOMAIN:-agent.example.com}}
       - N8N_DOMAIN=${N8N_DOMAIN:-flow.agent.example.com}
-      - OPENWEBUI_DOMAIN=${OPENWEBUI_DOMAIN:-chat.agent.example.com}
       - COUCHDB_DOMAIN=${COUCHDB_DOMAIN:-sync.agent.example.com}
+      - ODYSSEUS_DOMAIN=${ODYSSEUS_DOMAIN:-}
       - TIMEZONE=${TIMEZONE:-UTC}
-      - OLLAMA_BASE_URL=http://host.docker.internal:11434
-      - N8N_BASE_URL=http://n8n:5678
-      - N8N_API_KEY=${N8N_API_KEY:-}
       - CODE_AGENT_URL=${CODE_AGENT_URL:-}
       - CODE_AGENT_TOKEN=${CODE_AGENT_TOKEN:-}
-      - LOQ_OLLAMA_URL=${LOQ_OLLAMA_URL:-}
-      - LOQ_CONTROL_URL=${LOQ_CONTROL_URL:-}
-      - LOQ_CONTROL_TOKEN=${LOQ_CONTROL_TOKEN:-}
-      - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=utility
-    runtime: nvidia
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -66,27 +58,6 @@ services:
       - ${HOST_STACK_PATH:-./}:/host-stack:ro
       - /:/host:ro
       - dashboard_data:/app/data
-
-  openwebui:
-    image: ghcr.io/open-webui/open-webui:main
-    container_name: openwebui
-    restart: unless-stopped
-    expose:
-      - "8080"
-    environment:
-      - OLLAMA_BASE_URL=http://host.docker.internal:11434
-      - WEBUI_AUTH=true
-      - WEBUI_URL=https://${OPENWEBUI_DOMAIN:-chat.agent.example.com}
-      - ENABLE_RAG_WEB_SEARCH=True
-      - RAG_WEB_SEARCH_ENGINE=duckduckgo
-      - ENABLE_RAG_LOCAL_WEB_FETCH=True
-      - ENABLE_CODE_INTERPRETER=True
-      - CODE_EXECUTION_ENGINE=pyodide
-      - DEFAULT_MODELS=llama3.1:8b
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    volumes:
-      - openwebui_data:/app/backend/data
 
   n8n:
     image: docker.n8n.io/n8nio/n8n
@@ -103,7 +74,6 @@ services:
       - N8N_EDITOR_BASE_URL=https://${N8N_DOMAIN:-flow.agent.example.com}
       - WEBHOOK_URL=https://${N8N_DOMAIN:-flow.agent.example.com}
       - NODE_ENV=production
-      - OLLAMA_BASE_URL=http://host.docker.internal:11434
       - N8N_SECURE_COOKIE=false
       - GENERIC_TIMEZONE=${TIMEZONE:-UTC}
       - TZ=${TIMEZONE:-UTC}
@@ -127,7 +97,6 @@ services:
       - couchdb_data:/opt/couchdb/data
 
 volumes:
-  openwebui_data:
   n8n_data:
   caddy_data:
   caddy_config:

@@ -215,29 +215,18 @@ const logout = () => { token = ''; localStorage.removeItem('auth_token'); render
 // ─── State ─────────────────────────────────────────────────────────────
 const HISTORY_LEN = 60;
 let state = {
-  view: location.hash.replace(/^#\/?/, '') || 'dashboard',  // mobile section
+  view: location.hash.replace(/^#\/?/, '') || 'dashboard',
   config: { dashboardBaseUrl: '', openwebuiDomain: '', n8nDomain: '', couchdbDomain: '' },
-  stats: null, services: null, models: [], pull: [],
+  stats: null, services: null,
   history: { cpu: [], ram: [], swap: [], net_in: [], net_out: [], disk_read: [], disk_write: [] },
-  chat: [], chatModel: '', chatBusy: false, chatStatus: null,
-  savedChats: [], activeChatId: null, chatDirty: false, showSavedList: false,
-  chatJobId: null, chatStartTs: null,
   actionMsg: '',
   toasts: [],
-  chatMode: localStorage.getItem('chat_mode') || 'chat',  // 'chat' | 'code' | 'loq'
-  loqAgent: {
-    reachable: false, controlReachable: false, checked: false, controlOnline: false,
-    models: [], chatModel: localStorage.getItem('loq_model') || '',
-    chat: [], busy: false, status: null, dirty: false,
-    jobId: null, startTs: null,
-    activeChatId: null, showSavedList: false,
-  },
   codeAgent: {
     enabled: false, checked: false,
     sessions: [], active: null, messages: [],
     busy: false, status: null, startTs: null,
     pickerOpen: false,
-    pickerPath: '/media/ojee/NVME/Code/[GIT]/Claude',
+    pickerPath: '/home/ojee',
     pickerEntries: [], pickerParent: null,
     historyOpen: false, historyList: [],
     historyView: null, historyMessages: [], historyShowTools: false, historyCwd: null,
@@ -245,58 +234,6 @@ let state = {
 };
 
 // ─── Persistence ───────────────────────────────────────────────────────
-const persistChat = () => {
-  try {
-    localStorage.setItem('chat_state', JSON.stringify({
-      chat: state.chat, chatModel: state.chatModel, activeChatId: state.activeChatId,
-      chatDirty: state.chatDirty, chatJobId: state.chatJobId,
-      chatBusy: state.chatBusy, chatStartTs: state.chatStartTs,
-    }));
-  } catch {}
-};
-const restoreChat = () => {
-  try {
-    const s = JSON.parse(localStorage.getItem('chat_state'));
-    if (s && s.chat && s.chat.length) {
-      state.chat = s.chat;
-      state.chatModel = s.chatModel || '';
-      state.activeChatId = s.activeChatId || null;
-      state.chatDirty = s.chatDirty || false;
-      state.chatJobId = s.chatJobId || null;
-      if (s.chatBusy && s.chatJobId) {
-        state.chatBusy = true;
-        state.chatStartTs = s.chatStartTs || null;
-        state.chatStatus = 'reconnecting';
-      }
-    }
-  } catch {}
-};
-const persistLoq = () => {
-  try {
-    localStorage.setItem('loq_state', JSON.stringify({
-      chat: state.loqAgent.chat,
-      chatModel: state.loqAgent.chatModel,
-      busy: state.loqAgent.busy,
-      jobId: state.loqAgent.jobId,
-      startTs: state.loqAgent.startTs || null,
-    }));
-  } catch {}
-};
-const restoreLoq = () => {
-  try {
-    const s = JSON.parse(localStorage.getItem('loq_state'));
-    if (s) {
-      state.loqAgent.chat = s.chat || [];
-      state.loqAgent.chatModel = s.chatModel || state.loqAgent.chatModel;
-      if (s.busy && s.jobId) {
-        state.loqAgent.busy = true;
-        state.loqAgent.jobId = s.jobId;
-        state.loqAgent.startTs = s.startTs || null;
-        state.loqAgent.status = 'reconnecting';
-      }
-    }
-  } catch {}
-};
 
 const persistCode = () => {
   try {
@@ -582,23 +519,15 @@ const doAction = async (action, label) => {
 const panelActions = () => el('div', { class: 'panel', 'data-panel': 'actions' },
   el('div', { class: 'panel-head' }, el('span', {}, 'Actions')),
   el('div', { class: 'btn-row' },
-    el('button', { class: 'btn', onclick: () => doAction('restart-openwebui', 'Restart WebUI') }, ico('reload'), ' WebUI'),
     el('button', { class: 'btn', onclick: () => doAction('restart-n8n', 'Restart n8n') }, ico('reload'), ' n8n'),
     el('button', { class: 'btn', onclick: () => doAction('restart-dashboard', 'Restart Dashboard') }, ico('reload'), ' Dashboard'),
+    el('button', { class: 'btn', onclick: () => doAction('restart-couchdb', 'Restart CouchDB') }, ico('reload'), ' CouchDB'),
+    el('button', { class: 'btn', onclick: () => doAction('restart-odysseus', 'Restart Odysseus') }, ico('reload'), ' Odysseus'),
     el('button', { class: 'btn', onclick: () => doAction('pull-images', 'Pull Images') }, ico('download'), ' Pull'),
     el('button', { class: 'btn', onclick: () => doAction('compose-up', 'Compose Up') }, ico('power'), ' Up'),
     el('button', { class: 'btn danger', onclick: () => { if (confirm('Bring stack down?')) doAction('compose-down', 'Compose Down'); } }, ico('power'), ' Down'),
   ),
-  el('div', { class: 'panel-section' }, 'Model pull'),
-  el('div', { class: 'pull-box' }, (state.pull || []).join('\n') || 'no active pull'),
   el('div', { class: 'panel-section' }, 'Quick links'),
-  state.config.openwebuiDomain ? el('a', { class: 'link-card', href: `https://${state.config.openwebuiDomain}`, target: '_blank' },
-    el('div', { class: 'link-card-title' },
-      el('span', {}, 'Open WebUI'),
-      el('span', { class: 'link-card-sub' }, 'Full chat with RAG'),
-    ),
-    ico('arrow', 16),
-  ) : null,
   state.config.n8nDomain ? el('a', { class: 'link-card', href: `https://${state.config.n8nDomain}`, target: '_blank' },
     el('div', { class: 'link-card-title' },
       el('span', {}, 'n8n'),
@@ -606,58 +535,14 @@ const panelActions = () => el('div', { class: 'panel', 'data-panel': 'actions' }
     ),
     ico('arrow', 16),
   ) : null,
+  state.config.odysseusDomain ? el('a', { class: 'link-card', href: `https://${state.config.odysseusDomain}`, target: '_blank' },
+    el('div', { class: 'link-card-title' },
+      el('span', {}, 'Odysseus'),
+      el('span', { class: 'link-card-sub' }, 'Self-hosted AI workspace'),
+    ),
+    ico('arrow', 16),
+  ) : null,
 );
-
-// ─── Chat actions ──────────────────────────────────────────────────────
-const newChat = () => {
-  state.chat = []; state.activeChatId = null; state.chatDirty = false;
-  state.chatStatus = null; state.chatJobId = null; state.chatStartTs = null;
-  persistChat(); render();
-};
-const clearChat = () => { if (state.chat.length && !confirm('Clear current chat?')) return; newChat(); };
-const saveChat = async () => {
-  if (!state.chat.length) return;
-  const id = state.activeChatId || randId();
-  const firstUser = state.chat.find(m => m.role === 'user');
-  const title = (firstUser?.content || 'Chat').slice(0, 80);
-  await api(`/api/chats/${id}`, {
-    method: 'PUT',
-    body: JSON.stringify({ title, model: state.chatModel, messages: state.chat }),
-  });
-  state.activeChatId = id; state.chatDirty = false;
-  await loadSavedChats(); persistChat(); render();
-};
-const loadChat = async (id) => {
-  if (state.chatDirty && !state.activeChatId && !confirm('Discard unsaved chat?')) return;
-  const c = await api(`/api/chats/${id}`);
-  if (!c) return;
-  state.chat = c.messages || [];
-  state.activeChatId = c.id;
-  state.chatModel = c.model || state.chatModel;
-  state.chatDirty = false;
-  state.showSavedList = false;
-  state.chatBusy = false; state.chatStatus = null; state.chatJobId = null; state.chatStartTs = null;
-  persistChat(); render();
-};
-const deleteChat = async (id, e) => {
-  e?.stopPropagation();
-  if (!confirm('Delete this chat?')) return;
-  await api(`/api/chats/${id}`, { method: 'DELETE' });
-  if (state.activeChatId === id) { state.chat = []; state.activeChatId = null; }
-  await loadSavedChats(); persistChat(); render();
-};
-const renameChat = async (id, e) => {
-  e?.stopPropagation();
-  const c = state.savedChats.find(x => x.id === id);
-  const t = prompt('Rename chat:', c?.title || '');
-  if (!t || t === c?.title) return;
-  const full = await api(`/api/chats/${id}`);
-  if (full) { full.title = t; await api(`/api/chats/${id}`, { method: 'PUT', body: JSON.stringify(full) }); await loadSavedChats(); render(); }
-};
-const loadSavedChats = async () => {
-  const list = await api('/api/chats');
-  state.savedChats = Array.isArray(list) ? list : [];
-};
 
 // ─── Chat message rendering ────────────────────────────────────────────
 const typingDots = () => el('span', { class: 'typing-dots' }, el('span'), el('span'), el('span'));
@@ -695,7 +580,7 @@ const renderChatMsg = (m, opts = {}) => {
   }
 
   // Assistant message
-  const model = m.model || (state.chatMode === 'chat' ? state.chatModel : null);
+  const model = m.model || null;
   const tools = m.tools || [];
   const filesChanged = m.files_changed || [];
   const statusText = streaming
@@ -725,502 +610,6 @@ const renderChatMsg = (m, opts = {}) => {
 };
 
 // ─── Chat panel (unified Ollama + Code) ───────────────────────────────
-const setChatMode = (mode) => {
-  state.chatMode = mode;
-  localStorage.setItem('chat_mode', mode);
-  render();
-};
-
-const chatModesSwitch = () => el('div', { class: 'chat-modes' },
-  el('button', { class: 'chat-mode-btn' + (state.chatMode === 'chat' ? ' active' : ''), onclick: () => setChatMode('chat') },
-    'Chat'),
-  state.codeAgent.enabled ? el('button', { class: 'chat-mode-btn' + (state.chatMode === 'code' ? ' active' : ''), onclick: () => setChatMode('code') },
-    'Code') : null,
-  (state.loqAgent.reachable || state.loqAgent.controlReachable) ? el('button', { class: 'chat-mode-btn' + (state.chatMode === 'loq' ? ' active' : ''), onclick: () => setChatMode('loq') },
-    'Loq') : null,
-);
-
-const panelChat = () => {
-  if (state.chatMode === 'code' && state.codeAgent.enabled) return panelChatCode();
-  if (state.chatMode === 'loq' && (state.loqAgent.reachable || state.loqAgent.controlReachable)) return panelChatLoq();
-  return panelChatOllama();
-};
-
-// ─── Ollama chat ───────────────────────────────────────────────────────
-const panelChatOllama = () => {
-  const lastIdx = state.chat.length - 1;
-  const log = el('div', { class: 'chat-log' });
-
-  if (state.chat.length === 0) {
-    log.appendChild(el('div', { class: 'chat-empty' },
-      ico('message', 28),
-      el('div', {}, 'Ask anything'),
-    ));
-  } else {
-    state.chat.forEach((m, i) => log.appendChild(renderChatMsg(m, {
-      isLast: i === lastIdx, busy: state.chatBusy, busyStatus: state.chatStatus, busyStart: state.chatStartTs,
-    })));
-  }
-
-  const input = el('textarea', {
-    class: 'chat-input', rows: '1',
-    placeholder: state.chatModel ? 'Message…' : 'Pull a model first',
-  });
-  input.value = localStorage.getItem('draft_main') || '';
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
-  });
-  input.addEventListener('input', () => {
-    localStorage.setItem('draft_main', input.value);
-    input.style.height = 'auto';
-    input.style.height = Math.min(input.scrollHeight, 200) + 'px';
-  });
-
-  const send = async () => {
-    const text = input.value.trim();
-    if (!text || state.chatBusy || !state.chatModel) return;
-    const now = Date.now();
-    state.chat.push({ role: 'user', content: text, ts: now });
-    state.chat.push({ role: 'assistant', content: '', model: state.chatModel, tools: [], ts: null, elapsed_ms: null });
-    state.chatBusy = true; state.chatStatus = 'thinking';
-    state.chatDirty = true; state.chatStartTs = now;
-    input.value = ''; localStorage.removeItem('draft_main');
-    persistChat(); render();
-
-    try {
-      const r = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { ...headers(), 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: state.chatModel,
-          messages: state.chat.slice(0, -1).map(m => ({ role: m.role, content: m.content })),
-        }),
-      });
-      const reader = r.body.getReader();
-      const dec = new TextDecoder();
-      let buf = '';
-      let gotDone = false;
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
-        const lines = buf.split('\n');
-        buf = lines.pop() || '';
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          const p = line.slice(6);
-          if (p === '[DONE]') { gotDone = true; continue; }
-          try {
-            const j = JSON.parse(p);
-            if (j.job_id) { state.chatJobId = j.job_id; persistChat(); }
-            else if (j.clear_message) {
-              state.chat[state.chat.length - 1].content = '';
-              render();
-            } else if (j.message?.content) {
-              if (state.chatStatus !== 'typing') state.chatStatus = 'typing';
-              state.chat[state.chat.length - 1].content += j.message.content;
-              render();
-            } else if (j.tool_call) {
-              state.chatStatus = `${j.tool_call.name.replace(/^(get|list|read|web)_/, '')}`;
-              const last = state.chat[state.chat.length - 1];
-              if (!last.tools) last.tools = [];
-              if (!last.tools.includes(j.tool_call.name)) last.tools.push(j.tool_call.name);
-              render();
-            } else if (j.tool_result) {
-              state.chatStatus = 'thinking'; render();
-            }
-          } catch {}
-        }
-      }
-      // Stream ended without [DONE] — proxy/network dropped the connection
-      // but the server job is still running.  Reconnect and let the replay
-      // finish the message.
-      if (!gotDone && state.chatJobId) {
-        state.chatStatus = 'reconnecting'; persistChat(); render();
-        reconnectChatJob(state.chatJobId);
-        return;
-      }
-      if (state.activeChatId) saveChat().catch(() => {});
-    } catch (e) {
-      if (e.name === 'AbortError') {
-        const last = state.chat[state.chat.length - 1];
-        if (!last.content) last.content = '*(stopped)*';
-        else last.content += '\n\n*(stopped)*';
-      } else if (state.chatJobId) {
-        state.chatStatus = 'reconnecting'; persistChat(); render();
-        reconnectChatJob(state.chatJobId);
-        return;
-      } else {
-        state.chat[state.chat.length - 1].content = `Error: ${e.message}`;
-      }
-    }
-    const last = state.chat[state.chat.length - 1];
-    if (last && last.role === 'assistant') {
-      last.ts = Date.now();
-      last.elapsed_ms = state.chatStartTs ? Date.now() - state.chatStartTs : null;
-    }
-    state.chatJobId = null; state.chatBusy = false;
-    state.chatStatus = null; state.chatStartTs = null;
-    persistChat(); render();
-  };
-
-  const stop = () => { state.chatAbort?.abort(); };
-
-  const modelSel = el('select', { class: 'chat-select', onchange: (e) => { state.chatModel = e.target.value; persistChat(); render(); } },
-    ...(state.models.length ? state.models : [{ name: 'no models' }]).map(m =>
-      el('option', { value: m.name, ...(m.name === state.chatModel ? { selected: true } : {}) }, m.name),
-    ),
-  );
-
-  const toolbar = el('div', { class: 'chat-toolbar' },
-    modelSel,
-    el('button', { class: 'btn sm', onclick: newChat, title: 'New chat' }, ico('plus', 14)),
-    el('button', { class: 'btn sm', onclick: saveChat, title: 'Save chat', disabled: state.chat.length === 0 }, 'Save'),
-    el('button', { class: 'btn sm', onclick: () => { state.showSavedList = !state.showSavedList; render(); }, title: 'Browse saved' }, `${state.showSavedList ? 'Hide' : 'Saved'} (${state.savedChats.length})`),
-  );
-
-  const savedList = state.showSavedList
-    ? el('div', { class: 'saved-list' },
-        state.savedChats.length === 0
-          ? el('div', { class: 'muted', style: 'padding:10px;text-align:center;font-size:0.78rem' }, 'no saved chats')
-          : state.savedChats.map(c =>
-              el('div', { class: 'saved-item' + (c.id === state.activeChatId ? ' active' : ''), onclick: () => loadChat(c.id) },
-                el('div', { class: 'saved-title' }, c.title),
-                el('div', { class: 'saved-actions' },
-                  el('button', { class: 'btn ghost icon', onclick: (e) => renameChat(c.id, e), title: 'Rename' }, ico('pencil', 12)),
-                  el('button', { class: 'btn ghost icon danger', onclick: (e) => deleteChat(c.id, e), title: 'Delete' }, ico('trash', 12)),
-                ),
-              ),
-            ),
-      )
-    : null;
-
-  const activeBadge = state.activeChatId
-    ? el('div', { class: 'chat-active-badge' }, `editing: ${(state.savedChats.find(c => c.id === state.activeChatId) || {}).title || '—'}`)
-    : null;
-
-  return el('div', { class: 'panel chat-panel', 'data-panel': 'chat' },
-    el('div', { class: 'panel-head' },
-      el('span', {}, 'Chat'),
-      chatModesSwitch(),
-    ),
-    toolbar,
-    savedList,
-    activeBadge,
-    el('div', { class: 'chat-wrap' },
-      log,
-      el('div', { class: 'chat-form' },
-        input,
-        el('button', {
-          class: 'btn primary chat-send' + (state.chatBusy ? ' chat-stop' : ''),
-          onclick: state.chatBusy ? stop : send,
-          disabled: !state.chatModel,
-          title: state.chatBusy ? 'Stop' : 'Send',
-        }, state.chatBusy ? ico('stop', 14) : ico('send', 14)),
-      ),
-    ),
-  );
-};
-
-// ─── Loq Ollama (second local model on the laptop) ─────────────────────
-// Saved-chat helpers for loq mode — reuse the same /api/chats backend so
-// chats are unified across modes, but operate on state.loqAgent state.
-const loqNewChat = () => {
-  const lq = state.loqAgent;
-  lq.chat = []; lq.activeChatId = null; lq.dirty = false;
-  lq.status = null; lq.jobId = null; lq.startTs = null;
-  persistLoq(); render();
-};
-const loqSaveChat = async () => {
-  const lq = state.loqAgent;
-  if (!lq.chat.length) return;
-  const id = lq.activeChatId || randId();
-  const firstUser = lq.chat.find(m => m.role === 'user');
-  const title = (firstUser?.content || 'Chat').slice(0, 80);
-  await api(`/api/chats/${id}`, {
-    method: 'PUT',
-    body: JSON.stringify({ title, model: lq.chatModel, messages: lq.chat }),
-  });
-  lq.activeChatId = id; lq.dirty = false;
-  await loadSavedChats();
-  persistLoq(); render();
-};
-const loqLoadChat = async (id) => {
-  const lq = state.loqAgent;
-  if (lq.dirty && !lq.activeChatId && !confirm('Discard unsaved chat?')) return;
-  const c = await api(`/api/chats/${id}`);
-  if (!c) return;
-  lq.chat = c.messages || [];
-  lq.activeChatId = c.id;
-  // Only switch to the saved model if loq actually has it
-  if (c.model && lq.models.some(m => m.name === c.model)) lq.chatModel = c.model;
-  lq.dirty = false; lq.showSavedList = false;
-  lq.busy = false; lq.status = null; lq.jobId = null; lq.startTs = null;
-  persistLoq(); render();
-};
-
-const loqStartStop = async (action) => {
-  const r = await fetch(`/api/loq/${action}`, { method: 'POST', headers: headers() });
-  let data; try { data = await r.json(); } catch { data = {}; }
-  toast(`Loq ${action}: ${r.ok ? (data.message || 'OK') : (data.error || 'failed')}`, r.ok ? 'success' : 'danger', 5000);
-  // Refresh status soon after
-  setTimeout(refresh, 1500);
-};
-
-const reconnectLoqJob = async (jobId) => {
-  const lastIdx = state.loqAgent.chat.length - 1;
-  const lastMsg = state.loqAgent.chat[lastIdx];
-  const snapshot = lastMsg && lastMsg.role === 'assistant'
-    ? { content: lastMsg.content || '', tools: (lastMsg.tools || []).slice() } : null;
-  try {
-    const r = await fetch(`/api/loq/jobs/${jobId}`, { headers: headers() });
-    if (!r.ok) {
-      state.loqAgent.busy = false; state.loqAgent.status = null;
-      state.loqAgent.jobId = null; state.loqAgent.startTs = null;
-      const last = state.loqAgent.chat[state.loqAgent.chat.length - 1];
-      if (last?.role === 'assistant' && !last.content && snapshot?.content) last.content = snapshot.content;
-      if (last?.role === 'assistant' && !last.content) last.content = '*(session expired)*';
-      persistLoq(); render(); return;
-    }
-    if (lastMsg && lastMsg.role === 'assistant') { lastMsg.content = ''; lastMsg.tools = []; }
-    render();
-    const reader = r.body.getReader(); const dec = new TextDecoder();
-    let buf = ''; let gotAny = false;
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      const lines = buf.split('\n'); buf = lines.pop() || '';
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        const p = line.slice(6); if (p === '[DONE]') continue;
-        try {
-          const j = JSON.parse(p); gotAny = true;
-          if (j.clear_message) {
-            state.loqAgent.chat[state.loqAgent.chat.length - 1].content = '';
-            render();
-          } else if (j.message?.content) {
-            state.loqAgent.status = 'typing';
-            state.loqAgent.chat[state.loqAgent.chat.length - 1].content += j.message.content;
-            render();
-          } else if (j.tool_call) {
-            state.loqAgent.status = j.tool_call.name.replace(/^(get|list|read|web)_/, '');
-            const last = state.loqAgent.chat[state.loqAgent.chat.length - 1];
-            if (!last.tools) last.tools = [];
-            if (!last.tools.includes(j.tool_call.name)) last.tools.push(j.tool_call.name);
-            render();
-          } else if (j.tool_result) { state.loqAgent.status = 'thinking'; render(); }
-        } catch {}
-      }
-    }
-    const last = state.loqAgent.chat[state.loqAgent.chat.length - 1];
-    if (last?.role === 'assistant' && !last.content && snapshot?.content) {
-      last.content = snapshot.content; last.tools = snapshot.tools;
-    }
-  } catch {}
-  const last = state.loqAgent.chat[state.loqAgent.chat.length - 1];
-  if (last?.role === 'assistant') {
-    last.ts = Date.now();
-    last.elapsed_ms = state.loqAgent.startTs ? Date.now() - state.loqAgent.startTs : null;
-    if (!last.content && snapshot?.content) { last.content = snapshot.content; last.tools = snapshot.tools; }
-  }
-  state.loqAgent.jobId = null; state.loqAgent.busy = false;
-  state.loqAgent.status = null; state.loqAgent.startTs = null;
-  persistLoq(); render();
-};
-
-const panelChatLoq = () => {
-  const lq = state.loqAgent;
-
-  // Ollama is down but the control service answers: show a "stopped" empty
-  // state with a prominent Start button instead of the normal chat UI.
-  if (!lq.reachable && lq.controlReachable) {
-    return el('div', { class: 'panel chat-panel', 'data-panel': 'chat' },
-      el('div', { class: 'panel-head' }, el('span', {}, 'Loq'), chatModesSwitch()),
-      el('div', { class: 'chat-empty', style: 'gap: 16px' },
-        ico('power', 28),
-        el('div', {}, 'Loq Ollama is stopped'),
-        el('div', { class: 'muted', style: 'font-size: 0.78rem' }, 'Start it to chat with a local model on the laptop.'),
-        el('button', { class: 'btn primary', style: 'margin-top: 8px', onclick: () => loqStartStop('start') },
-          ico('power', 14), ' Start'),
-      ),
-    );
-  }
-
-  const lastIdx = lq.chat.length - 1;
-  const log = el('div', { class: 'chat-log' });
-  if (lq.chat.length === 0) {
-    log.appendChild(el('div', { class: 'chat-empty' },
-      ico('message', 28),
-      el('div', {}, lq.chatModel ? `Loq · ${lq.chatModel}` : 'Pick a model below'),
-    ));
-  } else {
-    lq.chat.forEach((m, i) => log.appendChild(renderChatMsg(m, {
-      isLast: i === lastIdx, busy: lq.busy, busyStatus: lq.status, busyStart: lq.startTs,
-    })));
-  }
-
-  const input = el('textarea', {
-    class: 'chat-input', rows: '1',
-    placeholder: lq.chatModel ? 'Message Loq…' : 'Pull a model on Loq first',
-  });
-  input.value = localStorage.getItem('draft_loq') || '';
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
-  });
-  input.addEventListener('input', () => {
-    localStorage.setItem('draft_loq', input.value);
-    input.style.height = 'auto';
-    input.style.height = Math.min(input.scrollHeight, 200) + 'px';
-  });
-
-  const send = async () => {
-    const text = input.value.trim();
-    if (!text || lq.busy || !lq.chatModel) return;
-    const now = Date.now();
-    lq.chat.push({ role: 'user', content: text, ts: now });
-    lq.chat.push({ role: 'assistant', content: '', model: lq.chatModel, tools: [], ts: null, elapsed_ms: null });
-    lq.busy = true; lq.status = 'thinking';
-    lq.dirty = true; lq.startTs = now;
-    input.value = ''; localStorage.removeItem('draft_loq');
-    lq.abort = new AbortController();
-    persistLoq(); render();
-    try {
-      const r = await fetch('/api/loq/chat', {
-        method: 'POST',
-        headers: { ...headers(), 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: lq.chatModel,
-          messages: lq.chat.slice(0, -1).map(m => ({ role: m.role, content: m.content })),
-        }),
-        signal: lq.abort.signal,
-      });
-      const reader = r.body.getReader(); const dec = new TextDecoder();
-      let buf = '';
-      let gotDone = false;
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
-        const lines = buf.split('\n'); buf = lines.pop() || '';
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          const p = line.slice(6);
-          if (p === '[DONE]') { gotDone = true; continue; }
-          try {
-            const j = JSON.parse(p);
-            if (j.job_id) { lq.jobId = j.job_id; persistLoq(); }
-            else if (j.clear_message) {
-              lq.chat[lq.chat.length - 1].content = '';
-              render();
-            } else if (j.message?.content) {
-              if (lq.status !== 'typing') lq.status = 'typing';
-              lq.chat[lq.chat.length - 1].content += j.message.content;
-              render();
-            } else if (j.tool_call) {
-              lq.status = j.tool_call.name.replace(/^(get|list|read|web)_/, '');
-              const last = lq.chat[lq.chat.length - 1];
-              if (!last.tools) last.tools = [];
-              if (!last.tools.includes(j.tool_call.name)) last.tools.push(j.tool_call.name);
-              render();
-            } else if (j.tool_result) { lq.status = 'thinking'; render(); }
-          } catch {}
-        }
-      }
-      // Stream ended without [DONE] — proxy/network dropped the connection
-      // but the server job is still running.  Reconnect and let the replay
-      // finish the message.
-      if (!gotDone && lq.jobId) {
-        lq.status = 'reconnecting'; persistLoq(); render();
-        reconnectLoqJob(lq.jobId);
-        return;
-      }
-      if (lq.activeChatId) loqSaveChat().catch(() => {});
-    } catch (e) {
-      if (e.name === 'AbortError') {
-        // user-initiated stop — keep whatever content streamed so far
-        const last = lq.chat[lq.chat.length - 1];
-        if (last?.role === 'assistant' && !last.content) last.content = '*(stopped)*';
-      } else if (lq.jobId) {
-        lq.status = 'reconnecting'; persistLoq(); render();
-        reconnectLoqJob(lq.jobId);
-        return;
-      } else {
-        lq.chat[lq.chat.length - 1].content = `Error: ${e.message}`;
-      }
-    }
-    const last = lq.chat[lq.chat.length - 1];
-    if (last?.role === 'assistant') {
-      last.ts = Date.now();
-      last.elapsed_ms = lq.startTs ? Date.now() - lq.startTs : null;
-    }
-    lq.jobId = null; lq.busy = false;
-    lq.status = null; lq.startTs = null;
-    persistLoq(); render();
-  };
-
-  // Hide models too large for Loq's 8 GB VRAM (anything > ~14 GB will OOM
-  // even with partial offload and crash the laptop's other apps).
-  const loqModels = lq.models.filter(m => !m.size || m.size <= 15e9);
-  const modelSel = el('select', { class: 'chat-select',
-    onchange: (e) => { lq.chatModel = e.target.value; localStorage.setItem('loq_model', e.target.value); render(); } },
-    ...(loqModels.length ? loqModels : [{ name: 'no models on loq' }]).map(m =>
-      el('option', { value: m.name, ...(m.name === lq.chatModel ? { selected: true } : {}) }, m.name),
-    ),
-  );
-
-  const toolbar = el('div', { class: 'chat-toolbar' },
-    modelSel,
-    el('button', { class: 'btn sm', onclick: loqNewChat, title: 'New chat' }, ico('plus', 14)),
-    el('button', { class: 'btn sm', onclick: loqSaveChat, title: 'Save chat', disabled: lq.chat.length === 0 }, 'Save'),
-    el('button', { class: 'btn sm', onclick: () => { lq.showSavedList = !lq.showSavedList; render(); }, title: 'Browse saved' }, `${lq.showSavedList ? 'Hide' : 'Saved'} (${state.savedChats.length})`),
-    el('button', { class: 'btn sm', title: 'Start Ollama on loq', onclick: () => loqStartStop('start') }, ico('power', 14), ' Start'),
-    el('button', { class: 'btn sm danger', title: 'Stop Ollama on loq (frees VRAM)', onclick: () => loqStartStop('stop') }, ico('stop', 14), ' Stop'),
-  );
-
-  const savedList = lq.showSavedList
-    ? el('div', { class: 'saved-list' },
-        state.savedChats.length === 0
-          ? el('div', { class: 'muted', style: 'padding:10px;text-align:center;font-size:0.78rem' }, 'no saved chats')
-          : state.savedChats.map(c =>
-              el('div', { class: 'saved-item' + (c.id === lq.activeChatId ? ' active' : ''), onclick: () => loqLoadChat(c.id) },
-                el('div', { class: 'saved-title' }, c.title),
-                el('div', { class: 'saved-actions' },
-                  el('button', { class: 'btn ghost icon', onclick: (e) => renameChat(c.id, e), title: 'Rename' }, ico('pencil', 12)),
-                  el('button', { class: 'btn ghost icon danger', onclick: (e) => deleteChat(c.id, e), title: 'Delete' }, ico('trash', 12)),
-                ),
-              ),
-            ),
-      )
-    : null;
-
-  const activeBadge = lq.activeChatId
-    ? el('div', { class: 'chat-active-badge' }, `editing: ${(state.savedChats.find(c => c.id === lq.activeChatId) || {}).title || '—'}`)
-    : null;
-
-  return el('div', { class: 'panel chat-panel', 'data-panel': 'chat' },
-    el('div', { class: 'panel-head' },
-      el('span', {}, 'Loq'),
-      chatModesSwitch(),
-    ),
-    toolbar,
-    savedList,
-    activeBadge,
-    el('div', { class: 'chat-wrap' },
-      log,
-      el('div', { class: 'chat-form' },
-        input,
-        el('button', {
-          class: 'btn primary chat-send' + (lq.busy ? ' chat-stop' : ''),
-          onclick: lq.busy ? () => lq.abort?.abort() : send,
-          disabled: !lq.chatModel,
-          title: lq.busy ? 'Stop' : 'Send',
-        }, lq.busy ? ico('stop', 14) : ico('send', 14)),
-      ),
-    ),
-  );
-};
-
 
 // ─── Code Agent (Claude Code) ──────────────────────────────────────────
 const caLoadDir = async (p) => {
@@ -1478,7 +867,7 @@ const panelChatCode = () => {
       rows.push(el('div', { class: 'ca-dir-row', onclick: () => caLoadDir(e.path) }, ico('folder', 14), el('span', {}, e.name)));
     }
     return el('div', { class: 'panel chat-panel', 'data-panel': 'chat' },
-      el('div', { class: 'panel-head' }, el('span', {}, 'Open Code In…'), chatModesSwitch()),
+      el('div', { class: 'panel-head' }, el('span', {}, 'Open Code In…')),
       el('div', { class: 'ca-path' }, ca.pickerPath),
       el('div', { class: 'ca-dir-list' }, ...rows),
       el('div', { class: 'btn-row' },
@@ -1502,7 +891,7 @@ const panelChatCode = () => {
       }
       const msgs = grouped.map(m => renderChatMsg(m));
       return el('div', { class: 'panel chat-panel', 'data-panel': 'chat' },
-        el('div', { class: 'panel-head' }, el('span', {}, 'History'), chatModesSwitch()),
+        el('div', { class: 'panel-head' }, el('span', {}, 'History')),
         el('div', { class: 'btn-row' },
           el('button', { class: 'btn sm', onclick: () => { ca.historyView = null; ca.historyMessages = []; ca.historyCwd = null; render(); } }, ico('arrow_left', 14), ' Back'),
           toolCount > 0 ? el('button', { class: 'btn sm', onclick: () => { ca.historyShowTools = !ca.historyShowTools; render(); } },
@@ -1515,7 +904,7 @@ const panelChatCode = () => {
       );
     }
     return el('div', { class: 'panel chat-panel', 'data-panel': 'chat' },
-      el('div', { class: 'panel-head' }, el('span', {}, 'History'), chatModesSwitch()),
+      el('div', { class: 'panel-head' }, el('span', {}, 'History')),
       el('button', { class: 'btn sm', onclick: () => { ca.historyOpen = false; render(); } }, ico('arrow_left', 14), ' Back'),
       ca.historyList.length === 0
         ? el('div', { class: 'muted', style: 'padding:20px;text-align:center;font-size:0.78rem' }, 'no past conversations')
@@ -1580,7 +969,6 @@ const panelChatCode = () => {
 
   const headerSection = el('div', { class: 'panel-head' },
     el('span', {}, 'Claude Code'),
-    chatModesSwitch(),
   );
 
   const toolbar = el('div', { class: 'btn-row' },
@@ -1657,7 +1045,7 @@ const render = () => {
     panelSystem(),
     panelServices(),
     panelActions(),
-    panelChat(),
+    panelChatCode(),
   );
   // On mobile, mark the active panel
   const activePanel = state.view === 'chat' ? 'chat'
@@ -1697,94 +1085,7 @@ const render = () => {
   }
   if (pageY) window.scrollTo(0, pageY);
 
-  if ((state.chatBusy && state.chatStartTs) || (state.codeAgent.busy && state.codeAgent.startTs) || (state.loqAgent.busy && state.loqAgent.startTs)) startLiveTimer();
-};
-
-// ─── Reconnect chat job ────────────────────────────────────────────────
-const reconnectChatJob = async (jobId) => {
-  // Snapshot the current message so if reconnect returns nothing, we restore it
-  const lastIdx = state.chat.length - 1;
-  const lastMsg = state.chat[lastIdx];
-  const snapshot = lastMsg && lastMsg.role === 'assistant'
-    ? { content: lastMsg.content || '', tools: (lastMsg.tools || []).slice() }
-    : null;
-
-  try {
-    const r = await fetch(`/api/chat/jobs/${jobId}`, { headers: headers() });
-    if (!r.ok) {
-      state.chatBusy = false; state.chatStatus = null;
-      state.chatJobId = null; state.chatStartTs = null;
-      const last = state.chat[state.chat.length - 1];
-      if (last && last.role === 'assistant') {
-        if (last.content) last.content = last.content.replace(/\n?\n?Error: .+$/, '').trim();
-        if (!last.content && snapshot) last.content = snapshot.content;
-        if (!last.content) last.content = '*(session expired)*';
-      }
-      persistChat(); render(); return;
-    }
-    // Server replays buffered events. Start from clean slate to avoid double-counting.
-    if (lastMsg && lastMsg.role === 'assistant') {
-      lastMsg.content = '';
-      lastMsg.tools = [];
-    }
-    render();
-    const reader = r.body.getReader();
-    const dec = new TextDecoder();
-    let buf = '';
-    let gotAny = false;
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      const lines = buf.split('\n');
-      buf = lines.pop() || '';
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        const p = line.slice(6);
-        if (p === '[DONE]') continue;
-        try {
-          const j = JSON.parse(p);
-          gotAny = true;
-          if (j.clear_message) {
-            state.chat[state.chat.length - 1].content = '';
-            render();
-          } else if (j.message?.content) {
-            state.chatStatus = 'typing';
-            state.chat[state.chat.length - 1].content += j.message.content;
-            render();
-          } else if (j.tool_call) {
-            state.chatStatus = `${j.tool_call.name.replace(/^(get|list|read|web)_/, '')}`;
-            const last = state.chat[state.chat.length - 1];
-            if (!last.tools) last.tools = [];
-            if (!last.tools.includes(j.tool_call.name)) last.tools.push(j.tool_call.name);
-            render();
-          } else if (j.tool_result) {
-            state.chatStatus = 'thinking'; render();
-          }
-        } catch {}
-      }
-    }
-    // If reconnect produced nothing usable AND we had snapshot content, restore it
-    const last = state.chat[state.chat.length - 1];
-    if (last && last.role === 'assistant' && !last.content && snapshot && snapshot.content) {
-      last.content = snapshot.content;
-      last.tools = snapshot.tools;
-    }
-  } catch {}
-  const last = state.chat[state.chat.length - 1];
-  if (last && last.role === 'assistant') {
-    last.ts = Date.now();
-    last.elapsed_ms = state.chatStartTs ? Date.now() - state.chatStartTs : null;
-    if (!last.content && snapshot && snapshot.content) {
-      last.content = snapshot.content;
-      last.tools = snapshot.tools;
-    }
-  }
-  state.chatJobId = null; state.chatBusy = false;
-  state.chatStatus = null; state.chatStartTs = null;
-  persistChat();
-  if (state.activeChatId) saveChat().catch(() => {});
-  render();
+  if (state.codeAgent.busy && state.codeAgent.startTs) startLiveTimer();
 };
 
 // ─── Polling ───────────────────────────────────────────────────────────
@@ -1796,11 +1097,9 @@ const pushHistory = (key, value) => {
 };
 const refresh = async () => {
   if (!token) return;
-  const [stats, services, models, pull] = await Promise.all([
+  const [stats, services] = await Promise.all([
     api('/api/stats'),
     api('/api/services'),
-    api('/api/models'),
-    api('/api/pull-progress'),
   ]);
   if (stats) {
     state.stats = stats;
@@ -1813,56 +1112,15 @@ const refresh = async () => {
     pushHistory('disk_write', stats.disk?.write_per_s || 0);
   }
   if (services) state.services = services;
-  if (pull) state.pull = pull.lines;
 
-  let needsRender = false;
-  if (models?.models) {
-    const pref = ['llama3.1:8b', 'hermes3:8b', 'qwen2.5:7b', 'qwen2.5-coder:7b', 'llama3.2:3b'];
-    state.models = [...models.models].sort((a, b) => {
-      const ia = pref.indexOf(a.name), ib = pref.indexOf(b.name);
-      if (ia === -1 && ib === -1) return 0;
-      if (ia === -1) return 1;
-      if (ib === -1) return -1;
-      return ia - ib;
-    });
-    if (!state.chatModel && state.models.length) {
-      state.chatModel = state.models[0].name;
-      needsRender = true;
-    }
-  }
   if (!state.codeAgent.checked) {
     state.codeAgent.checked = true;
     const cfg = await api('/api/code-agent/config');
-    const was = state.codeAgent.enabled;
     state.codeAgent.enabled = !!cfg?.enabled;
-    if (was !== state.codeAgent.enabled) needsRender = true;
   }
   if (state.codeAgent.enabled && !state.codeAgent.busy) {
     const s = await api('/api/code-agent/sessions');
     if (s?.active) state.codeAgent.sessions = s.active;
-  }
-  // Probe loq laptop's Ollama (cheap, ~1.5s timeout server-side)
-  if (!state.loqAgent.busy) {
-    const lq = await api('/api/loq/status');
-    if (lq) {
-      const before = `${state.loqAgent.reachable}|${state.loqAgent.controlReachable}`;
-      state.loqAgent.reachable = !!lq.reachable;
-      state.loqAgent.controlReachable = !!lq.controlReachable;
-      state.loqAgent.controlOnline = !!lq.daemon;
-      state.loqAgent.models = lq.models || [];
-      // Loq tab can only run models that fit in 8 GB VRAM (~14 GB blob).
-      // Anything bigger crashes the laptop, so don't let one stay selected.
-      const loqFits = state.loqAgent.models.filter(m => !m.size || m.size <= 15e9);
-      if (!state.loqAgent.chatModel || !loqFits.some(m => m.name === state.loqAgent.chatModel)) {
-        if (loqFits.length) {
-          state.loqAgent.chatModel = loqFits[0].name;
-          localStorage.setItem('loq_model', state.loqAgent.chatModel);
-          needsRender = true;
-        }
-      }
-      const after = `${state.loqAgent.reachable}|${state.loqAgent.controlReachable}`;
-      if (before !== after) needsRender = true;
-    }
   }
   // Always re-render so gauges/sparklines update — DOM rebuild is cheap
   render();
@@ -1876,37 +1134,13 @@ const boot = async () => {
     const r = await fetch('/api/config');
     if (r.ok) state.config = await r.json();
   } catch {}
-  restoreChat();
   restoreCode();
-  restoreLoq();
-  await loadSavedChats();
   render();
   refresh();
   setInterval(refresh, 5000);
 
-  if (state.chatBusy && state.chatJobId) {
-    const last = state.chat[state.chat.length - 1];
-    if (last?.role === 'assistant' && last.content) {
-      last.content = last.content.replace(/\n?\n?Error: .+$/, '').trim();
-    }
-    state.chatStatus = 'reconnecting'; render();
-    reconnectChatJob(state.chatJobId);
-  }
-  if (state.loqAgent.busy && state.loqAgent.jobId) {
-    state.loqAgent.status = 'reconnecting'; render();
-    reconnectLoqJob(state.loqAgent.jobId);
-  }
-
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState !== 'visible') return;
-    if (state.chatBusy && state.chatJobId) {
-      state.chatStatus = 'reconnecting'; render();
-      reconnectChatJob(state.chatJobId);
-    }
-    if (state.loqAgent.busy && state.loqAgent.jobId) {
-      state.loqAgent.status = 'reconnecting'; render();
-      reconnectLoqJob(state.loqAgent.jobId);
-    }
     if (state.codeAgent.busy && state.codeAgent.active) {
       state.codeAgent.status = 'reconnecting'; render();
       caReconnect(state.codeAgent.active);

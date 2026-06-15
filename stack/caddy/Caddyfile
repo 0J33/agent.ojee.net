@@ -24,11 +24,12 @@
   }
 }
 
-# Open WebUI
-{$OPENWEBUI_DOMAIN} {
+# Odysseus — self-hosted AI workspace (separate docker-compose project at
+# /home/ojee/odysseus, binds 7000 to host).  Comment this out if you don't
+# run Odysseus on the host.
+{$ODYSSEUS_DOMAIN} {
   import cf_tls
-  reverse_proxy openwebui:8080
-  encode gzip
+  reverse_proxy host.docker.internal:7000
 }
 
 # n8n.  Serves a custom apple-touch-icon out of the dashboard because
