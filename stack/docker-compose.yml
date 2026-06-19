@@ -48,6 +48,7 @@ services:
       - TIMEZONE=${TIMEZONE:-UTC}
       - CODE_AGENT_URL=${CODE_AGENT_URL:-}
       - CODE_AGENT_TOKEN=${CODE_AGENT_TOKEN:-}
+      - LOQ_SFTP_URL=${LOQ_SFTP_URL:-}
       # NVIDIA_VISIBLE_DEVICES + runtime: nvidia let the dashboard's
       # /api/stats endpoint exec nvidia-smi for the GPU gauge.  Leave the
       # NVIDIA_* vars set to "" if you don't have a GPU — the container

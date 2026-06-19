@@ -160,6 +160,7 @@ const ICONS = {
   settings: '<circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.6" fill="none"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 0 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 0 1-4 0v-.1a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 0 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 0 1 0-4h.1a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 0 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3 1.6 1.6 0 0 0 1-1.5V3a2 2 0 0 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 0 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8 1.6 1.6 0 0 0 1.5 1H21a2 2 0 0 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z" stroke="currentColor" stroke-width="1.4" fill="none"/>',
   logout:   '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
   copy:     '<rect x="9" y="9" width="13" height="13" rx="2" stroke="currentColor" stroke-width="1.6" fill="none"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" stroke="currentColor" stroke-width="1.6" fill="none"/>',
+  archive:  '<rect x="2" y="4" width="20" height="5" rx="1" stroke="currentColor" stroke-width="1.6" fill="none"/><path d="M4 9v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9M10 13h4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/>',
 };
 const ico = (name, size = 16) => svg(ICONS[name] || '', { size });
 
@@ -258,6 +259,8 @@ const restoreCode = () => {
       }
     }
   } catch {}
+  const defCwd = localStorage.getItem('code_default_cwd');
+  if (defCwd) state.codeAgent.pickerPath = defCwd;
 };
 
 window.addEventListener('hashchange', () => {
@@ -523,7 +526,6 @@ const panelActions = () => el('div', { class: 'panel', 'data-panel': 'actions' }
     el('button', { class: 'btn', onclick: () => doAction('restart-dashboard', 'Restart Dashboard') }, ico('reload'), ' Dashboard'),
     el('button', { class: 'btn', onclick: () => doAction('restart-couchdb', 'Restart CouchDB') }, ico('reload'), ' CouchDB'),
     el('button', { class: 'btn', onclick: () => doAction('restart-odysseus', 'Restart Odysseus') }, ico('reload'), ' Odysseus'),
-    el('button', { class: 'btn', onclick: () => doAction('pull-images', 'Pull Images') }, ico('download'), ' Pull'),
     el('button', { class: 'btn', onclick: () => doAction('compose-up', 'Compose Up') }, ico('power'), ' Up'),
     el('button', { class: 'btn danger', onclick: () => { if (confirm('Bring stack down?')) doAction('compose-down', 'Compose Down'); } }, ico('power'), ' Down'),
   ),
@@ -541,6 +543,17 @@ const panelActions = () => el('div', { class: 'panel', 'data-panel': 'actions' }
       el('span', { class: 'link-card-sub' }, 'Self-hosted AI workspace'),
     ),
     ico('arrow', 16),
+  ) : null,
+  state.config.loqSftpUrl ? el('div', { class: 'link-card', onclick: async (e) => {
+    e.preventDefault();
+    try { await navigator.clipboard.writeText(state.config.loqSftpUrl); toast('SFTP URL copied', 'success'); }
+    catch { toast(state.config.loqSftpUrl, 'info', 8000); }
+  }, style: 'cursor:pointer' },
+    el('div', { class: 'link-card-title' },
+      el('span', {}, 'Loq files (SFTP)'),
+      el('span', { class: 'link-card-sub' }, 'Tap to copy ' + state.config.loqSftpUrl),
+    ),
+    ico('copy', 16),
   ) : null,
 );
 
@@ -626,16 +639,23 @@ const caRefreshSessions = async () => {
   if (data) state.codeAgent.sessions = data.active || [];
   render();
 };
-const caOpenHere = async () => {
-  const cwd = state.codeAgent.pickerPath;
+const caOpenSessionAt = async (cwd) => {
+  if (!cwd) return;
   const d = await api('/api/code-agent/sessions', { method: 'POST', body: JSON.stringify({ cwd }) });
   if (d?.id) {
     state.codeAgent.active = d.id;
     state.codeAgent.messages = [];
     state.codeAgent.pickerOpen = false;
+    localStorage.setItem('code_default_cwd', cwd);
     persistCode();
     await caRefreshSessions();
   }
+};
+const caOpenHere = () => caOpenSessionAt(state.codeAgent.pickerPath);
+const caNewDefault = () => {
+  const def = localStorage.getItem('code_default_cwd');
+  if (def) caOpenSessionAt(def);
+  else { state.codeAgent.pickerOpen = true; render(); caLoadDir(state.codeAgent.pickerPath); }
 };
 const caSelect = async (id) => {
   state.codeAgent.active = id;
@@ -653,14 +673,17 @@ const caRename = async (id, e) => {
   const r = await api(`/api/code-agent/sessions/${id}`, { method: 'PATCH', body: JSON.stringify({ title: t }) });
   if (r && !r.error) await caRefreshSessions();
 };
+// Archive: ends the running session.  The conversation transcript lives in
+// Claude's projects dir on disk, so it stays browsable from the History
+// button — "Archive" is the natural label for that, not "Close" or "Delete".
 const caClose = async (id, e) => {
   e?.stopPropagation();
-  if (!confirm('Close this session? (Claude history is kept on disk.)')) return;
   await api(`/api/code-agent/sessions/${id}`, { method: 'DELETE' });
   if (state.codeAgent.active === id) {
     state.codeAgent.active = null; state.codeAgent.messages = [];
     state.codeAgent.busy = false; persistCode();
   }
+  toast('Moved to history', 'success');
   await caRefreshSessions();
 };
 
@@ -929,9 +952,17 @@ const panelChatCode = () => {
     ));
   } else {
     const lastIdx = ca.messages.length - 1;
-    ca.messages.forEach((m, i) => log.appendChild(renderChatMsg(m, {
-      isLast: i === lastIdx, busy: ca.busy, busyStatus: ca.status, busyStart: ca.startTs,
-    })));
+    ca.messages.forEach((m, i) => {
+      // Skip empty assistant placeholders left over from a tool turn that
+      // produced no text — they show up as "(empty)" otherwise.  The streaming
+      // placeholder (last + busy) stays because it renders the typing dots.
+      const isLast = i === lastIdx;
+      const empty = m.role === 'assistant' && !(m.text || m.content);
+      if (empty && !(isLast && ca.busy)) return;
+      log.appendChild(renderChatMsg(m, {
+        isLast, busy: ca.busy, busyStatus: ca.status, busyStart: ca.startTs,
+      }));
+    });
   }
 
   const input = el('textarea', { class: 'chat-input', rows: '1',
@@ -960,7 +991,7 @@ const panelChatCode = () => {
             el('span', { class: 'ca-sess-cwd' }, s.cwd.replace(/^\/media\/ojee\/NVME\/Code\/\[GIT\]\//, '')),
             el('div', { class: 'saved-actions' },
               el('button', { class: 'btn ghost icon', onclick: (e) => caRename(s.id, e), title: 'Rename' }, ico('pencil', 12)),
-              el('button', { class: 'btn ghost icon danger', onclick: (e) => caClose(s.id, e), title: 'Close' }, ico('trash', 12)),
+              el('button', { class: 'btn ghost icon', onclick: (e) => caClose(s.id, e), title: 'Archive — move to history' }, ico('archive', 12)),
             ),
           ),
         ),
@@ -971,9 +1002,11 @@ const panelChatCode = () => {
     el('span', {}, 'Claude Code'),
   );
 
+  const defCwd = localStorage.getItem('code_default_cwd');
   const toolbar = el('div', { class: 'btn-row' },
-    el('button', { class: 'btn sm primary', onclick: () => { ca.pickerOpen = true; render(); caLoadDir(ca.pickerPath); } }, ico('plus', 14), ' New'),
-    el('button', { class: 'btn sm', onclick: caRefreshSessions }, ico('reload', 14)),
+    el('button', { class: 'btn sm primary', onclick: caNewDefault, title: defCwd ? `New in ${defCwd}` : 'Pick a folder' }, ico('plus', 14), ' New'),
+    el('button', { class: 'btn sm', onclick: () => { ca.pickerOpen = true; render(); caLoadDir(ca.pickerPath); }, title: 'Browse for a different folder' }, ico('folder', 14)),
+    el('button', { class: 'btn sm', onclick: caRefreshSessions, title: 'Refresh' }, ico('reload', 14)),
     el('button', { class: 'btn sm', onclick: caLoadHistory }, ico('history', 14), ' History'),
   );
 
@@ -985,6 +1018,8 @@ const panelChatCode = () => {
       el('div', { class: 'ca-active-head' },
         el('span', { class: 'ca-active-title' }, activeSession.title),
         el('span', { class: 'ca-active-cwd' }, activeSession.cwd),
+        el('button', { class: 'btn ghost icon', onclick: (e) => caRename(activeSession.id, e), title: 'Rename' }, ico('pencil', 12)),
+        el('button', { class: 'btn ghost icon', onclick: (e) => caClose(activeSession.id, e), title: 'Archive — move to history' }, ico('archive', 12)),
       ),
       log,
       el('div', { class: 'chat-form' },
@@ -1095,6 +1130,25 @@ const pushHistory = (key, value) => {
   arr.push(value);
   if (arr.length > HISTORY_LEN) arr.shift();
 };
+// Targeted in-place swap of the two stat panels only — leaves the chat
+// panel, its input element and the actions panel untouched.  Critical for
+// mobile: a full DOM rebuild every 5s would dismiss + re-show the keyboard.
+const refreshStatsPanels = () => {
+  const oldSys = document.querySelector('.panel[data-panel="dashboard"]');
+  const oldSvc = document.querySelector('.panel[data-panel="services"]');
+  if (!oldSys || !oldSvc) { render(); return; }
+  const newSys = panelSystem();
+  const newSvc = panelServices();
+  if (oldSys.classList.contains('mobile-active')) newSys.classList.add('mobile-active');
+  if (oldSvc.classList.contains('mobile-active')) newSvc.classList.add('mobile-active');
+  // Status pill in the header reflects state.stats, so swap that too
+  const pill = document.querySelector('.header-right .status-pill');
+  if (pill) pill.className = state.stats ? 'status-pill' : 'status-pill offline';
+  if (pill) pill.textContent = state.stats ? 'Online' : 'Offline';
+  oldSys.replaceWith(newSys);
+  oldSvc.replaceWith(newSvc);
+};
+
 const refresh = async () => {
   if (!token) return;
   const [stats, services] = await Promise.all([
@@ -1122,8 +1176,9 @@ const refresh = async () => {
     const s = await api('/api/code-agent/sessions');
     if (s?.active) state.codeAgent.sessions = s.active;
   }
-  // Always re-render so gauges/sparklines update — DOM rebuild is cheap
-  render();
+  // Only swap the stat panels in place — full render() would dismiss the
+  // mobile keyboard each tick.
+  refreshStatsPanels();
 };
 
 // ─── Boot ──────────────────────────────────────────────────────────────

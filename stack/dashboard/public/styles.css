@@ -592,12 +592,13 @@ a { color: var(--accent); text-decoration: none; }
 
 .chat-form {
   display: flex; gap: var(--sp-2);
-  flex-shrink: 0; align-items: flex-end;
+  flex-shrink: 0; align-items: stretch;
   padding-top: var(--sp-2);
   border-top: 1px solid var(--border);
 }
 .chat-input {
   flex: 1;
+  box-sizing: border-box;
   padding: 10px 12px;
   background: var(--bg-elev-2);
   border: 1px solid var(--border);
@@ -605,15 +606,17 @@ a { color: var(--accent); text-decoration: none; }
   resize: none;
   font-size: 0.85rem;
   font-family: var(--font-sans);
-  min-height: 40px; max-height: 200px;
-  line-height: 1.5;
+  height: 40px; min-height: 40px; max-height: 200px;
+  line-height: 1.4;
   transition: border-color 120ms;
 }
 .chat-input:focus { border-color: var(--accent); }
 .chat-send {
-  min-width: 64px; min-height: 40px;
-  padding: 8px 14px;
-  font-size: 0.78rem;
+  flex-shrink: 0;
+  min-width: 44px; height: 40px;
+  padding: 0 14px;
+  font-size: 0.85rem;
+  display: inline-flex; align-items: center; justify-content: center;
 }
 .chat-send.chat-stop {
   background: var(--danger-dim);
@@ -855,6 +858,18 @@ a { color: var(--accent); text-decoration: none; }
   /* Mobile uses tab navigation — only one panel visible at a time */
   .panel { display: none; max-height: none; overflow-y: visible; }
   .panel.mobile-active { display: flex; }
+  /* When the chat tab is active the page should NOT scroll — the chat-log
+     inside scrolls instead.  Switch the shell to fixed-viewport mode and
+     give chat-panel a bounded flex slot so its inner log can scroll. */
+  body:has(.chat-panel.mobile-active),
+  body:has(.chat-panel.mobile-active) .dash { height: 100dvh; overflow: hidden; min-height: 0; }
+  body:has(.chat-panel.mobile-active) .grid {
+    flex: 1; min-height: 0; overflow: hidden;
+    padding-bottom: calc(76px + var(--safe-bottom));
+  }
+  .chat-panel.mobile-active { overflow: hidden; min-height: 0; }
+  .chat-panel.mobile-active .chat-wrap { flex: 1; min-height: 0; overflow: hidden; }
+  .chat-panel.mobile-active .chat-log { flex: 1; min-height: 0; overflow-y: auto; }
   .panel-head { font-size: 0.72rem; }
   .stat-row { font-size: 0.85rem; }
   .stat-val { font-size: 0.78rem; }

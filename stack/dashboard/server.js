@@ -18,6 +18,7 @@ const N8N_DOMAIN = process.env.N8N_DOMAIN || '';
 const OPENWEBUI_DOMAIN = process.env.OPENWEBUI_DOMAIN || '';
 const COUCHDB_DOMAIN = process.env.COUCHDB_DOMAIN || '';
 const ODYSSEUS_DOMAIN = process.env.ODYSSEUS_DOMAIN || '';
+const LOQ_SFTP_URL = process.env.LOQ_SFTP_URL || '';
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
@@ -32,6 +33,7 @@ app.get('/api/config', (req, res) => {
     n8nDomain: N8N_DOMAIN,
     couchdbDomain: COUCHDB_DOMAIN,
     odysseusDomain: ODYSSEUS_DOMAIN,
+    loqSftpUrl: LOQ_SFTP_URL,
     timezone: TIMEZONE,
   });
 });
@@ -193,7 +195,6 @@ const ACTIONS = {
   'restart-dashboard': 'docker restart dashboard',
   'restart-couchdb': 'docker restart couchdb',
   'restart-odysseus': 'docker restart odysseus',
-  'pull-images': 'docker compose --project-directory /host-stack pull',
   'compose-up': 'docker compose --project-directory /host-stack up -d',
   'compose-down': 'docker compose --project-directory /host-stack down',
 };
