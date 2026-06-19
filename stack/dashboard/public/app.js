@@ -102,8 +102,26 @@ function renderMarkdown(text) {
     const body = block.trim().split(/\n/).map(l => l.replace(/^&gt;\s+/, '')).join('<br>');
     return `<blockquote class="md-bq">${body}</blockquote>`;
   });
+  // GitHub-flavored tables: header row, separator (| --- | --- |), data rows
+  src = src.replace(/^\|(.+)\|\s*\n\|([-:\s|]+)\|\s*\n((?:\|.*\|\s*\n?)+)/gm, (_, hdr, sep, body) => {
+    const cells = (row) => row.split('|').slice(1, -1).map(c => c.trim());
+    const aligns = sep.split('|').slice(1, -1).map(s => {
+      const t = s.trim();
+      if (t.startsWith(':') && t.endsWith(':')) return 'center';
+      if (t.endsWith(':')) return 'right';
+      if (t.startsWith(':')) return 'left';
+      return '';
+    });
+    const inlineFmt = (s) => s; // already through escapeHtml + inline replacements
+    const th = cells(hdr).map((c, i) => `<th${aligns[i] ? ` style="text-align:${aligns[i]}"` : ''}>${inlineFmt(c)}</th>`).join('');
+    const trs = body.trim().split(/\n/).map(row => {
+      const tds = cells(row).map((c, i) => `<td${aligns[i] ? ` style="text-align:${aligns[i]}"` : ''}>${inlineFmt(c)}</td>`).join('');
+      return `<tr>${tds}</tr>`;
+    }).join('');
+    return `<table class="md-table"><thead><tr>${th}</tr></thead><tbody>${trs}</tbody></table>`;
+  });
   src = src.split(/\n{2,}/).map(p => {
-    if (/^<(h\d|ul|ol|pre|blockquote|p)/.test(p.trim())) return p;
+    if (/^<(h\d|ul|ol|pre|blockquote|table|p)/.test(p.trim())) return p;
     return `<p>${p.trim().replace(/\n/g, '<br>')}</p>`;
   }).join('');
   src = src.replace(/\u0000CODEBLOCK(\d+)\u0000/g, (_, i) => {

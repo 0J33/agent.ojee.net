@@ -803,6 +803,27 @@ a { color: var(--accent); text-decoration: none; }
 .chat-msg { min-width: 0; overflow: hidden; }
 .chat-msg .md-body { min-width: 0; overflow: hidden; }
 .chat-msg .md-body .md-code { max-width: 100%; overflow-x: auto; }
+.md-body .md-table {
+  border-collapse: collapse;
+  margin: 0.6em 0;
+  width: 100%;
+  font-size: 0.85em;
+  display: block;
+  overflow-x: auto;
+}
+.md-body .md-table th,
+.md-body .md-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+.md-body .md-table th {
+  background: var(--bg);
+  font-weight: 600;
+  color: var(--text);
+}
+.md-body .md-table tbody tr:nth-child(even) td { background: rgba(255, 255, 255, 0.02); }
 
 /* ─── Scrollbars ───────────────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 8px; height: 8px; }
