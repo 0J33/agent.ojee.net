@@ -48,6 +48,13 @@ services:
       - TIMEZONE=${TIMEZONE:-UTC}
       - CODE_AGENT_URL=${CODE_AGENT_URL:-}
       - CODE_AGENT_TOKEN=${CODE_AGENT_TOKEN:-}
+      # NVIDIA_VISIBLE_DEVICES + runtime: nvidia let the dashboard's
+      # /api/stats endpoint exec nvidia-smi for the GPU gauge.  Leave the
+      # NVIDIA_* vars set to "" if you don't have a GPU — the container
+      # will start fine without the runtime.
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=utility
+    runtime: ${DOCKER_RUNTIME:-runc}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
