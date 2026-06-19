@@ -727,7 +727,8 @@ const caReconnect = async (id) => {
         try {
           const e = JSON.parse(p);
           gotAny = true;
-          if (e.type === 'text') { ensureLast(); state.codeAgent.messages[state.codeAgent.messages.length - 1].text += e.text; state.codeAgent.status = 'typing'; }
+          let isTextChunk = false;
+          if (e.type === 'text') { ensureLast(); state.codeAgent.messages[state.codeAgent.messages.length - 1].text += e.text; state.codeAgent.status = 'typing'; isTextChunk = true; }
           else if (e.type === 'tool_use') {
             state.codeAgent.messages.push({ role: 'tool_use', tool: e.tool, input: e.input, ts: Date.now() });
             state.codeAgent.messages.push({ role: 'assistant', text: '', ts: Date.now(), elapsed_ms: null });
@@ -735,7 +736,8 @@ const caReconnect = async (id) => {
           }
           else if (e.type === 'tool_result') state.codeAgent.status = 'thinking';
           else if (e.type === 'result') state.codeAgent.status = e.is_error ? 'error' : null;
-          persistCode(); render();
+          persistCode();
+          if (isTextChunk) updateStreamingMessage(); else render();
         } catch {}
       }
     }
@@ -785,7 +787,7 @@ const caSend = async (text) => {
         try {
           const e = JSON.parse(p);
           const last = state.codeAgent.messages[state.codeAgent.messages.length - 1];
-          if (e.type === 'text') { last.text += e.text; state.codeAgent.status = 'typing'; persistCode(); render(); }
+          if (e.type === 'text') { last.text += e.text; state.codeAgent.status = 'typing'; persistCode(); updateStreamingMessage(); }
           else if (e.type === 'tool_use') {
             state.codeAgent.messages.push({ role: 'tool_use', tool: e.tool, input: e.input, ts: Date.now() });
             state.codeAgent.messages.push({ role: 'assistant', text: '', ts: Date.now(), elapsed_ms: null });
@@ -946,10 +948,17 @@ const panelChatCode = () => {
         : el('div', { class: 'ca-hist-list' },
             ...ca.historyList.map(conv =>
               el('div', { class: 'saved-item', onclick: () => caViewHistory(conv) },
-                el('div', { class: 'saved-title' }, conv.title),
-                el('div', { class: 'ca-hist-date' }, fmtTime(conv.modified)),
-                el('button', { class: 'btn ghost icon', onclick: (e) => caRenameHistory(conv, e), title: 'Rename' }, ico('pencil', 12)),
-                el('button', { class: 'btn ghost icon danger', onclick: (e) => caDeleteHistory(conv, e), title: 'Delete' }, ico('trash', 12)),
+                el('div', { class: 'ca-hist-row' },
+                  el('div', { class: 'saved-title' }, conv.title),
+                  el('div', { class: 'saved-actions' },
+                    el('button', { class: 'btn ghost icon', onclick: (e) => caRenameHistory(conv, e), title: 'Rename' }, ico('pencil', 12)),
+                    el('button', { class: 'btn ghost icon danger', onclick: (e) => caDeleteHistory(conv, e), title: 'Delete' }, ico('trash', 12)),
+                  ),
+                ),
+                el('div', { class: 'ca-hist-meta-row' },
+                  el('span', { class: 'ca-hist-date' }, fmtTime(conv.modified)),
+                  conv.messageCount ? el('span', { class: 'ca-hist-count' }, `${conv.messageCount} msgs`) : null,
+                ),
               ),
             ),
           ),
@@ -1042,6 +1051,26 @@ const panelChatCode = () => {
       ),
     ) : null,
   );
+};
+
+// Update only the last assistant message's body during streaming — avoids
+// the full DOM rebuild that was making the send button flash on every text
+// chunk.  Falls back to render() if we can't find the target node.
+const updateStreamingMessage = () => {
+  const log = document.querySelector('.chat-log');
+  if (!log) return render();
+  const last = state.codeAgent.messages[state.codeAgent.messages.length - 1];
+  if (!last || last.role !== 'assistant') return render();
+  const bodies = log.querySelectorAll('.chat-msg.chat-assistant .md-body');
+  const body = bodies[bodies.length - 1];
+  if (!body) return render();
+  const txt = last.content || last.text || '';
+  body.innerHTML = renderMarkdown(txt) || '';
+  body.appendChild(el('span', { class: 'typing-cursor' }, '▍'));
+  // Stick to bottom if we were near it
+  if (log.scrollHeight - log.scrollTop - log.clientHeight < 100) {
+    log.scrollTop = log.scrollHeight;
+  }
 };
 
 // ─── Live timer ────────────────────────────────────────────────────────

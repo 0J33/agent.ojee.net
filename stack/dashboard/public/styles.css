@@ -686,8 +686,27 @@ a { color: var(--accent); text-decoration: none; }
   max-width: 100%;
 }
 .ca-tool span { word-break: break-all; min-width: 0; }
-.ca-hist-list { display: flex; flex-direction: column; gap: 2px; max-height: 60vh; overflow-y: auto; }
-.ca-hist-list .saved-item { flex-direction: column; align-items: flex-start; gap: 4px; }
+.ca-hist-list {
+  display: flex; flex-direction: column; gap: 4px;
+  max-height: 60vh; overflow-y: auto;
+  padding: var(--sp-1);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+.ca-hist-list .saved-item {
+  flex-direction: column; align-items: stretch;
+  gap: 4px;
+  padding: 10px 12px;
+}
+.ca-hist-row { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; }
+.ca-hist-list .saved-title {
+  flex: 1; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-weight: 500; color: var(--text); font-size: 0.84rem;
+}
+.ca-hist-meta-row { display: flex; align-items: center; gap: var(--sp-3); }
+.ca-hist-count { font-size: 0.66rem; color: var(--text-faint); font-family: var(--font-mono); }
 .ca-hist-title { font-weight: 700; color: var(--accent); font-size: 0.85rem; margin: var(--sp-2) 0 var(--sp-1); }
 .ca-hist-meta { font-size: 0.7rem; color: var(--text-dim); margin-bottom: var(--sp-3); }
 .ca-hist-date { font-size: 0.66rem; color: var(--text-faint); font-family: var(--font-mono); }
