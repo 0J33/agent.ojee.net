@@ -40,6 +40,31 @@ const sessions = new Map();
 
 const safeExists = (p) => { try { return fs.existsSync(p); } catch { return false; } };
 
+// ─── Persistent custom-title store ──────────────────────────────────────
+// Session titles live in memory (the `sessions` Map) and disappear when a
+// session is archived or the process restarts.  Conversation history in
+// ~/.claude/projects has no concept of "title" — we synthesize it from the
+// first user message.  So a user-edited title would get lost as soon as the
+// session moves to archive.  Persist them in a tiny JSON file keyed by
+// session id; that id is the same one Claude uses for the .jsonl filename.
+const STORE_DIR = path.join(HOME, '.local', 'share', 'code-agent');
+const TITLES_FILE = path.join(STORE_DIR, 'titles.json');
+let customTitles = {};
+try {
+  if (safeExists(TITLES_FILE)) customTitles = JSON.parse(fs.readFileSync(TITLES_FILE, 'utf8')) || {};
+} catch { customTitles = {}; }
+const persistTitles = () => {
+  try {
+    fs.mkdirSync(STORE_DIR, { recursive: true });
+    fs.writeFileSync(TITLES_FILE, JSON.stringify(customTitles));
+  } catch (e) { console.error('failed to persist titles:', e.message); }
+};
+const setCustomTitle = (id, title) => {
+  if (!title) { delete customTitles[id]; }
+  else customTitles[id] = title.toString().slice(0, 80);
+  persistTitles();
+};
+
 // ─── Health ─────────────────────────────────────────────────────────────
 app.get('/health', (req, res) => res.json({ ok: true, version: '0.1.0' }));
 
@@ -66,28 +91,39 @@ app.get('/api/dirs', auth, (req, res) => {
 // ─── Sessions ──────────────────────────────────────────────────────────
 app.post('/api/sessions', auth, (req, res) => {
   const cwd = path.resolve(req.body.cwd || DEFAULT_CWD);
-  const title = (req.body.title || path.basename(cwd) || 'Session').toString().slice(0, 80);
+  const baseTitle = (req.body.title || path.basename(cwd) || 'Session').toString().slice(0, 80);
   if (!safeExists(cwd) || !fs.statSync(cwd).isDirectory()) {
     return res.status(400).json({ error: 'cwd must be an existing directory', cwd });
   }
   const id = randomUUID();
-  const session = { id, cwd, title, createdAt: Date.now(), lastActivityAt: Date.now(), initialized: false };
+  const session = { id, cwd, title: customTitles[id] || baseTitle, createdAt: Date.now(), lastActivityAt: Date.now(), initialized: false };
   sessions.set(id, session);
   res.json(session);
 });
 
 app.get('/api/sessions', auth, (req, res) => {
-  res.json({ active: Array.from(sessions.values()).sort((a, b) => b.lastActivityAt - a.lastActivityAt) });
+  res.json({
+    active: Array.from(sessions.values())
+      .map(s => ({ ...s, title: customTitles[s.id] || s.title }))
+      .sort((a, b) => b.lastActivityAt - a.lastActivityAt),
+  });
 });
 
 app.patch('/api/sessions/:id', auth, (req, res) => {
   const s = sessions.get(req.params.id);
   if (!s) return res.status(404).json({ error: 'session not found' });
-  if (req.body.title) s.title = req.body.title.toString().slice(0, 80);
+  if (req.body.title != null) {
+    const t = req.body.title.toString().slice(0, 80);
+    s.title = t;
+    // Persist so the title survives archival, restart, and history lookup.
+    setCustomTitle(req.params.id, t);
+  }
   res.json(s);
 });
 
 app.delete('/api/sessions/:id', auth, (req, res) => {
+  // Archive: drop from active map but KEEP the custom title — the
+  // conversation is moving to history where we still want it labelled.
   const ok = sessions.delete(req.params.id);
   res.json({ ok });
 });
@@ -152,10 +188,13 @@ app.get('/api/history', auth, (req, res) => {
               }
             } catch {}
           }
+          const convId = file.replace('.jsonl', '');
           conversations.push({
-            id: file.replace('.jsonl', ''),
+            id: convId,
             project: proj.name,
-            title: firstUserMsg || file.replace('.jsonl', ''),
+            // Custom title (set via PATCH or carried over from archived
+            // session) wins over the auto-derived first-message snippet.
+            title: customTitles[convId] || firstUserMsg || convId,
             modified: stat.mtimeMs,
             messageCount: lines.length,
           });
@@ -167,12 +206,22 @@ app.get('/api/history', auth, (req, res) => {
   } catch (e) { res.status(500).json({ error: String(e.message || e) }); }
 });
 
+// Rename a past conversation — persists in titles.json keyed by session id.
+app.patch('/api/history/:project/:id', auth, (req, res) => {
+  const filePath = path.join(HOME, '.claude', 'projects', req.params.project, `${req.params.id}.jsonl`);
+  if (!safeExists(filePath)) return res.status(404).json({ error: 'not found' });
+  if (req.body.title == null) return res.status(400).json({ error: 'title required' });
+  setCustomTitle(req.params.id, req.body.title.toString());
+  res.json({ ok: true, title: customTitles[req.params.id] });
+});
+
 // Delete a past conversation
 app.delete('/api/history/:project/:id', auth, (req, res) => {
   const filePath = path.join(HOME, '.claude', 'projects', req.params.project, `${req.params.id}.jsonl`);
   if (!safeExists(filePath)) return res.status(404).json({ error: 'not found' });
   try {
     fs.unlinkSync(filePath);
+    setCustomTitle(req.params.id, null);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: String(e.message || e) }); }
 });

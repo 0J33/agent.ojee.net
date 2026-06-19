@@ -279,6 +279,13 @@ app.delete('/api/code-agent/history/:project/:id', auth, async (req, res) => {
   catch (e) { res.status(500).json({ error: String(e.message || e) }); }
 });
 
+app.patch('/api/code-agent/history/:project/:id', auth, async (req, res) => {
+  try {
+    const r = await codeAgentReq(`/api/history/${encodeURIComponent(req.params.project)}/${encodeURIComponent(req.params.id)}`, { method: 'PATCH', body: JSON.stringify(req.body || {}) });
+    res.status(r.status).json(await r.json());
+  } catch (e) { res.status(500).json({ error: String(e.message || e) }); }
+});
+
 // Reconnect to an in-progress session stream
 app.get('/api/code-agent/sessions/:id/stream', auth, async (req, res) => {
   if (!codeAgentUp()) return res.status(503).json({ error: 'code agent not configured' });

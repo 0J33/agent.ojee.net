@@ -861,6 +861,18 @@ const caContinue = async () => {
   persistCode();
   await caRefreshSessions();
 };
+const caRenameHistory = async (conv, e) => {
+  e?.stopPropagation();
+  const t = prompt('Rename:', conv.title || '');
+  if (!t || t === conv.title) return;
+  const r = await api(`/api/code-agent/history/${encodeURIComponent(conv.project)}/${encodeURIComponent(conv.id)}`, {
+    method: 'PATCH', body: JSON.stringify({ title: t }),
+  });
+  if (r?.ok) {
+    conv.title = r.title || t;
+    render();
+  } else toast('Rename failed', 'danger');
+};
 const caDeleteHistory = async (conv, e) => {
   e?.stopPropagation();
   if (!confirm(`Delete "${conv.title.slice(0, 60)}${conv.title.length > 60 ? '…' : ''}"?`)) return;
@@ -936,6 +948,7 @@ const panelChatCode = () => {
               el('div', { class: 'saved-item', onclick: () => caViewHistory(conv) },
                 el('div', { class: 'saved-title' }, conv.title),
                 el('div', { class: 'ca-hist-date' }, fmtTime(conv.modified)),
+                el('button', { class: 'btn ghost icon', onclick: (e) => caRenameHistory(conv, e), title: 'Rename' }, ico('pencil', 12)),
                 el('button', { class: 'btn ghost icon danger', onclick: (e) => caDeleteHistory(conv, e), title: 'Delete' }, ico('trash', 12)),
               ),
             ),
