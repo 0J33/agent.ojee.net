@@ -5,13 +5,13 @@
    live in the "ojee-ui compliance layer" at the end of this file. */
 :root {
   /* Surfaces — near-black + warm-grey derivatives */
-  --bg:           #0e0d0a;
-  --bg-elev-1:    #131210;
-  --bg-elev-2:    #181712;
-  --bg-elev-3:    #1f1d18;
-  --surface-glass: rgba(14, 13, 10, 0.88);
-  --border:       rgba(232, 230, 223, 0.10);
-  --border-strong: #2a2823;
+  --bg:           #08080e;
+  --bg-elev-1:    #0f0f17;
+  --bg-elev-2:    #14141d;
+  --bg-elev-3:    #1b1b26;
+  --surface-glass: rgba(8, 8, 14, 0.88);
+  --border:       rgba(216, 222, 236, 0.10);
+  --border-strong: #24252f;
   --border-accent: rgba(0, 255, 255, 0.35);
 
   /* Text — cream ink scale */
@@ -87,7 +87,11 @@ html, body {
 body {
   overflow: hidden;
   overscroll-behavior: none;
-  background: var(--bg);
+  /* Cool near-black drafting backdrop — matches ojee.net wallpaper. NOT warm. */
+  background:
+    radial-gradient(1200px 800px at 70% 26%, rgba(0, 255, 255, 0.045), transparent 60%),
+    linear-gradient(180deg, #06060a, #0a0a10);
+  background-attachment: fixed;
 }
 input, button, textarea, select { font-family: inherit; font-size: inherit; color: inherit; outline: none; }
 button { cursor: pointer; background: none; border: none; }
@@ -953,7 +957,7 @@ a { color: var(--accent); text-decoration: none; }
 body {
   font-family: var(--font-mono);
   background-color: var(--bg);
-  background-image: radial-gradient(rgba(232, 230, 223, 0.06) 1px, transparent 1px);
+  background-image: radial-gradient(rgba(216, 222, 236, 0.06) 1px, transparent 1px);
   background-size: 18px 18px;
 }
 
@@ -1052,7 +1056,7 @@ a:hover { color: var(--accent); }
   display: flex; align-items: center; gap: 22px;
   height: 28px; padding: 0 var(--sp-5);
   border-bottom: 1px solid var(--border);
-  background: rgba(14, 13, 10, 0.92);
+  background: rgba(8, 8, 14, 0.92);
   font-family: var(--font-hud); font-size: 0.58rem;
   letter-spacing: 0.18em; text-transform: uppercase; color: var(--text-dim);
   flex-shrink: 0; overflow-x: auto; white-space: nowrap; scrollbar-width: none;
@@ -1070,7 +1074,7 @@ a:hover { color: var(--accent); }
 .dash-titleblock {
   display: grid; grid-template-columns: repeat(4, 1fr);
   border-top: 1px solid var(--border); flex-shrink: 0;
-  background: rgba(14, 13, 10, 0.7);
+  background: rgba(8, 8, 14, 0.7);
 }
 .dash-titleblock .tb {
   display: flex; flex-direction: column; gap: 3px;
