@@ -1044,3 +1044,59 @@ a:hover { color: var(--accent); }
   .brand-sub { display: none; }
   .header-right { gap: 8px; }
 }
+
+/* ─── Drafting-sheet HUD chrome (ojee-ui drafting language) ───────────────
+   Top status strip + title-block footer + refined access gate, mirroring
+   the ojee.net home "drawing sheet". */
+.hudbar {
+  display: flex; align-items: center; gap: 22px;
+  height: 28px; padding: 0 var(--sp-5);
+  border-bottom: 1px solid var(--border);
+  background: rgba(14, 13, 10, 0.92);
+  font-family: var(--font-hud); font-size: 0.58rem;
+  letter-spacing: 0.18em; text-transform: uppercase; color: var(--text-dim);
+  flex-shrink: 0; overflow-x: auto; white-space: nowrap; scrollbar-width: none;
+}
+.hudbar::-webkit-scrollbar { display: none; }
+.hudbar .seg { display: inline-flex; align-items: center; gap: 7px; flex: none; }
+.hudbar .seg b { color: var(--text-muted); font-weight: 400; }
+.hudbar .seg.live { color: var(--accent); }
+.hudbar .seg.live::before {
+  content: ''; width: 6px; height: 6px; flex: none;
+  background: var(--accent); box-shadow: 0 0 8px var(--accent); animation: pulse 2s infinite;
+}
+.hudbar .seg.right { margin-left: auto; }
+
+.dash-titleblock {
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  border-top: 1px solid var(--border); flex-shrink: 0;
+  background: rgba(14, 13, 10, 0.7);
+}
+.dash-titleblock .tb {
+  display: flex; flex-direction: column; gap: 3px;
+  padding: 6px var(--sp-5); border-right: 1px solid var(--border); min-width: 0;
+}
+.dash-titleblock .tb:last-child { border-right: 0; }
+.dash-titleblock .tb .k {
+  font-family: var(--font-hud); font-size: 0.5rem;
+  letter-spacing: 0.16em; text-transform: uppercase; color: var(--text-dim);
+}
+.dash-titleblock .tb .v { font-size: 0.72rem; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dash-titleblock .tb .v.accent { color: var(--accent); }
+@media (max-width: 820px) { .dash-titleblock { display: none; } }
+
+.login-hud {
+  display: flex; align-items: center; gap: 14px; width: 100%;
+  padding-bottom: var(--sp-3); margin-bottom: var(--sp-1);
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-hud); font-size: 0.55rem;
+  letter-spacing: 0.16em; text-transform: uppercase; color: var(--text-dim);
+}
+.login-hud .live { color: var(--accent); display: inline-flex; align-items: center; gap: 6px; }
+.login-hud .live::before { content: ''; width: 5px; height: 5px; background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+.login-hud .right { margin-left: auto; }
+.login-stamp {
+  display: inline-block; padding: 3px 9px; border: 1px solid var(--border-accent);
+  font-family: var(--font-hud); font-size: 0.5rem; letter-spacing: 0.2em; text-transform: uppercase;
+  color: var(--accent); transform: rotate(-4deg); margin-top: var(--sp-1);
+}

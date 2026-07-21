@@ -220,11 +220,17 @@ const renderLogin = () => {
       } catch { err.textContent = 'Connection failed'; }
     },
   },
+    el('div', { class: 'login-hud' },
+      el('span', { class: 'live' }, 'secure'),
+      el('span', {}, 'access gate'),
+      el('span', { class: 'right' }, 'dvg 000'),
+    ),
     brandIcon('login-logo'),
     el('div', { class: 'login-title' }, 'agent', el('span', { class: 'brand-dot' }, '.'), 'ojee'),
     input,
     el('button', { type: 'submit', class: 'login-btn' }, 'Authenticate'),
     err,
+    el('div', { class: 'login-stamp' }, 'restricted'),
   );
   document.body.append(el('div', { class: 'login-wrap' }, form));
   input.focus();
@@ -321,6 +327,27 @@ const renderHeader = () => el('div', { class: 'header' },
     el('button', { class: 'btn ghost icon', onclick: logout, title: 'Logout' }, ico('logout', 16)),
   ),
 );
+
+// ─── Drafting-sheet HUD chrome (mirrors ojee.net home) ─────────────────
+const renderHudbar = () => {
+  const s = state.stats || {};
+  return el('div', { class: 'hudbar' },
+    el('span', { class: 'seg live' }, state.stats ? 'live' : 'offline'),
+    el('span', { class: 'seg' }, 'station ', el('b', {}, 'agent.ojee')),
+    s.hostname ? el('span', { class: 'seg' }, 'host ', el('b', {}, s.hostname)) : null,
+    s.uptime != null ? el('span', { class: 'seg' }, 'uptime ', el('b', {}, fmtUp(s.uptime))) : null,
+    el('span', { class: 'seg right' }, 'local ', el('b', { class: 'hud-clock' }, new Date().toLocaleTimeString('en-GB'))),
+  );
+};
+const renderTitleblock = () => {
+  const s = state.stats || {};
+  return el('div', { class: 'dash-titleblock' },
+    el('div', { class: 'tb' }, el('span', { class: 'k' }, 'drawing'), el('span', { class: 'v' }, 'agent.ojee · control deck')),
+    el('div', { class: 'tb' }, el('span', { class: 'k' }, 'operator'), el('span', { class: 'v' }, 'ojee · 0j33')),
+    el('div', { class: 'tb' }, el('span', { class: 'k' }, 'host'), el('span', { class: 'v' }, `${s.hostname || '—'}${s.os ? ' · ' + s.os : ''}`)),
+    el('div', { class: 'tb' }, el('span', { class: 'k' }, 'status'), el('span', { class: 'v accent' }, state.stats ? 'online · live' : 'offline')),
+  );
+};
 
 // ─── Bottom-tab nav (mobile) ───────────────────────────────────────────
 const renderBottomTabs = () => {
@@ -1152,7 +1179,7 @@ const render = () => {
   }
 
   document.body.append(
-    el('div', { class: 'dash' }, renderHeader(), grid),
+    el('div', { class: 'dash' }, renderHudbar(), renderHeader(), grid, renderTitleblock()),
     renderBottomTabs(),
   );
   if (toastStack) document.body.appendChild(toastStack);
@@ -1296,6 +1323,12 @@ const interLink = document.createElement('link');
 interLink.rel = 'stylesheet';
 interLink.href = 'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap';
 document.head.appendChild(interLink);
+
+// Tick the HUD clock every second without a full re-render.
+setInterval(() => {
+  const c = document.querySelector('.hud-clock');
+  if (c) c.textContent = new Date().toLocaleTimeString('en-GB');
+}, 1000);
 
 if (!token) renderLogin();
 else boot();
