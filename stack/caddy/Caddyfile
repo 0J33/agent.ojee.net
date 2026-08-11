@@ -45,6 +45,26 @@
   encode gzip
 }
 
+# Home hub — device control, scenes and automations.
+{$HOME_DOMAIN} {
+  import cf_tls
+
+  # The live state stream must not be compressed or buffered: `encode` holds gzip frames
+  # until its window fills, which stalls Server-Sent Events for tens of seconds and makes
+  # the UI look frozen. flush_interval -1 disables response buffering for this route.
+  @sse path /api/events
+  handle @sse {
+    reverse_proxy home:8110 {
+      flush_interval -1
+    }
+  }
+
+  handle {
+    encode gzip
+    reverse_proxy home:8110
+  }
+}
+
 # CouchDB for Obsidian (Self-hosted LiveSync plugin).  LiveSync does
 # attachment streaming, so don't gzip — let CouchDB send raw JSON.
 # Comment this block out if you don't run the Obsidian sync backend.

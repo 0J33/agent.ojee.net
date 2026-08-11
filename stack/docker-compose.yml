@@ -20,6 +20,7 @@ services:
       - N8N_DOMAIN=${N8N_DOMAIN:-flow.agent.example.com}
       - COUCHDB_DOMAIN=${COUCHDB_DOMAIN:-sync.agent.example.com}
       - ODYSSEUS_DOMAIN=${ODYSSEUS_DOMAIN:-odysseus.agent.example.com}
+      - HOME_DOMAIN=${HOME_DOMAIN:-home.example.com}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -31,6 +32,7 @@ services:
       - dashboard
       - n8n
       - couchdb
+      - home
 
   dashboard:
     build: ./dashboard
@@ -104,6 +106,35 @@ services:
     volumes:
       - couchdb_data:/opt/couchdb/data
 
+  # Home hub — local device control (Haier AC over the LAN protocol on tcp/56800), plus
+  # scenes and automations.  Bridge networking is deliberate: the container reaches the AC
+  # through the host's routing table, so it needs no host network and Caddy can still find
+  # it by name.  With no AC_LOCAL_KEY set it runs a simulated device instead of failing,
+  # which keeps the UI usable before the key fetch has been done.
+  home:
+    build: ./home
+    container_name: home
+    restart: unless-stopped
+    expose:
+      - "8110"
+    environment:
+      - TIMEZONE=${TIMEZONE:-UTC}
+      - HUB_DEMO=${HUB_DEMO:-0}
+      - HUB_POLL_SECONDS=${HUB_POLL_SECONDS:-45}
+      - AC_NAME=${AC_NAME:-Living Room AC}
+      - AC_ROOM=${AC_ROOM:-Living Room}
+      - AC_HOST=${AC_HOST:-192.168.1.36}
+      - AC_DEVICE_ID=${AC_DEVICE_ID:-}
+      - AC_LOCAL_KEY=${AC_LOCAL_KEY:-}
+      - AC_TYPE_ID=${AC_TYPE_ID:-}
+      - AC_SUBNET=${AC_SUBNET:-192.168.1.0/24}
+      # Setpoint limits for this specific unit. Blank keeps the model profile's range
+      # (the protocol-wide 16..30); this AC's own remote only allows 20..28.
+      - AC_TEMP_MIN=${AC_TEMP_MIN:-}
+      - AC_TEMP_MAX=${AC_TEMP_MAX:-}
+    volumes:
+      - home_data:/data
+
 volumes:
   n8n_data:
   caddy_data:
@@ -111,3 +142,4 @@ volumes:
   caddy_logs:
   dashboard_data:
   couchdb_data:
+  home_data:

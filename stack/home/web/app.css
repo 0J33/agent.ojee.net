@@ -1,0 +1,324 @@
+/* ============================================================
+   home.ojee.net — app layer on top of ojee-ui.
+   Every value here resolves to an ojee-ui token. No new colours,
+   no border-radius, no non-mono type: the system stays the system.
+   ============================================================ */
+
+.sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
+
+/* icons: one stroke language everywhere — 1.5px, square caps, no fills */
+.ic {
+  width: 16px; height: 16px; flex: none;
+  fill: none; stroke: currentColor;
+  stroke-width: 1.5; stroke-linecap: square; stroke-linejoin: miter;
+}
+.ic--lg { width: 22px; height: 22px; }
+.ic--xl { width: 30px; height: 30px; }
+
+.skip {
+  position: absolute; left: -9999px; top: 0; z-index: 999;
+  padding: 10px 16px; background: var(--accent); color: #000;
+  font-size: 0.65rem; font-weight: 900; letter-spacing: 2px; text-transform: uppercase;
+}
+.skip:focus { left: 0; }
+
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ---------- shell ----------
+   Full-height column so the status bar sits on the viewport bottom when a page is short,
+   instead of leaving a gap under it. */
+html, body { min-height: 100%; }
+body { display: flex; flex-direction: column; min-height: 100dvh; }
+.wrap { flex: 1 0 auto; }
+.statusbar { flex: none; }
+
+/* Both bars stick, so the nav has to start below the hudbar rather than at 0 — otherwise
+   they occupy the same 30px and the nav renders on top of the status strip. */
+.hudbar { position: sticky; top: 0; z-index: 60; flex: none; }
+.nav { position: sticky; top: 30px; z-index: 50; flex: none; }
+
+.wrap {
+  width: 100%;
+  max-width: 1180px;
+  margin: 0 auto;
+  /* Modest bottom padding here — the big clearance is only needed under the mobile tab bar
+     (set in the breakpoint below). Carrying 120px on desktop made short pages scroll ~90px
+     for no reason. */
+  padding: var(--s-4) var(--s-4) var(--s-5);
+}
+
+.section-head {
+  display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+  padding-bottom: var(--s-2); margin-bottom: var(--s-3);
+  border-bottom: 1px solid var(--line);
+}
+.section-head .idx { font-family: var(--hud); font-size: 0.6rem; letter-spacing: 0.18em; color: var(--accent); }
+.section-head .spacer { flex: 1; }
+
+.stack-lg { display: flex; flex-direction: column; gap: var(--s-4); }
+
+/* ---------- bottom tab bar (mobile only) ---------- */
+.tabbar { display: none; }
+@media (max-width: 860px) {
+  .nav-links { display: none; }
+  .tabbar {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 80;
+    display: grid; grid-template-columns: repeat(5, 1fr);
+    background: rgba(8, 8, 14, 0.96);
+    border-top: 1px solid var(--line);
+    backdrop-filter: blur(8px);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .tabbar .tabitem {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 5px; min-height: 56px; padding: 8px 4px;
+    background: none; border: 0; border-top: 1px solid transparent; margin-top: -1px;
+    font-family: var(--mono); font-size: 0.5rem; font-weight: 900;
+    letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--dim); cursor: pointer; transition: color 0.15s;
+  }
+  .tabbar .tabitem.active { color: var(--accent); border-top-color: var(--accent); }
+  /* The fixed tab bar owns the bottom edge; the status bar would sit underneath it and its
+     content is already in the hudbar, so drop it rather than stack two strips. */
+  .statusbar { display: none; }
+  .wrap { padding: var(--s-3) var(--s-3) 110px; }
+}
+
+/* ojee-ui's .panel--glowtop and .corners each style `::before` on the element they sit on —
+   an element only has one, so combining the classes merges the 14px corner bracket with the
+   glow gradient and hover paints a solid cyan block in the top-left. They are alternatives.
+   The markup uses .corners; this guard keeps the artifact from coming back if the other
+   class is ever added alongside it. */
+.panel--glowtop.corners::before { background: none; opacity: 1; }
+
+/* ---------- overview tiles ---------- */
+/* 150px floor rather than 190: on a 390px phone that lands two tiles per row, so the
+   four-tile summary costs one screen-half instead of a whole screen before any control. */
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 2px; }
+
+/* ---------- device card ---------- */
+.devcard { display: flex; flex-direction: column; gap: var(--s-3); }
+.devcard .devtop { display: flex; align-items: flex-start; gap: 12px; }
+.devcard .devname { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.devcard .devname b {
+  font-size: 0.95rem; font-weight: 900; text-transform: uppercase;
+  letter-spacing: 1px; color: var(--ink);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* one-line explanation under a control whose name does not carry its meaning */
+.hint {
+  font-size: 0.62rem; line-height: 1.65; color: var(--dim);
+  margin-top: 6px; max-width: 60ch;
+}
+
+/* ojee-ui's title block sizes its cells from a 120px grid floor and does not constrain the
+   value, so a long one (the host:port link) runs past the cell border. Let it wrap inside
+   its own cell instead of escaping it. */
+.titleblock .tb { min-width: 0; }
+.titleblock .tb .tb-v { min-width: 0; overflow-wrap: anywhere; }
+
+/* ---------- climate dial ---------- */
+.dialwrap { display: flex; flex-direction: column; align-items: center; gap: var(--s-3); }
+.dial { position: relative; width: 100%; max-width: 260px; aspect-ratio: 1; }
+.dial svg { width: 100%; height: 100%; display: block; }
+.dial .d-track { fill: none; stroke: var(--line-2); stroke-width: 10; }
+.dial .d-fill {
+  fill: none; stroke: var(--accent); stroke-width: 10; stroke-linecap: butt;
+  filter: drop-shadow(0 0 6px rgba(0, 255, 255, 0.45));
+  transition: stroke-dasharray 0.45s ease, stroke 0.2s;
+}
+.dial .d-tick { stroke: var(--line); stroke-width: 1; }
+.dial.is-off .d-fill { stroke: var(--dim); filter: none; }
+.dial .d-center {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  pointer-events: none;
+}
+.dial .d-set { font-size: 3.1rem; font-weight: 700; line-height: 1; letter-spacing: -2px; color: var(--ink); font-variant-numeric: tabular-nums; }
+.dial .d-set sup { font-size: 1.1rem; font-weight: 400; vertical-align: super; color: var(--dim); }
+.dial.is-off .d-set { color: var(--dim); }
+
+.dialbtns { display: flex; align-items: center; gap: var(--s-3); }
+
+/* ojee-ui draws .range as a 2px hairline — correct visually, but a 2px-tall touch target.
+   Grow the input to a 44px hit area and move the hairline into the track pseudo-element so
+   the design is unchanged and the target is reachable. */
+.dialbtns .range {
+  height: 44px;
+  background: transparent;
+  display: block;
+}
+.dialbtns .range::-webkit-slider-runnable-track { height: 2px; background: var(--line); }
+.dialbtns .range::-moz-range-track { height: 2px; background: var(--line); }
+.dialbtns .range::-webkit-slider-thumb { margin-top: -6px; }
+.dialbtns .range:disabled { opacity: 0.4; cursor: not-allowed; }
+.stepbtn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 48px; height: 48px; flex: none;
+  background: var(--panel); color: var(--ink);
+  border: 1px solid var(--line); cursor: pointer; transition: var(--t);
+}
+.stepbtn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); background: var(--accent-03); }
+.stepbtn:disabled { color: var(--dim); cursor: not-allowed; opacity: 0.5; }
+
+/* ---------- segmented control ---------- */
+.segctl { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 2px; }
+.segctl button {
+  min-height: 44px; padding: 10px 8px;
+  background: var(--panel); border: 1px solid var(--line-2);
+  font-family: var(--mono); font-size: 0.62rem; font-weight: 900;
+  letter-spacing: 1.2px; text-transform: uppercase;
+  color: var(--ink-2); cursor: pointer; transition: var(--t);
+}
+.segctl button:hover:not(:disabled) { border-color: #333; color: var(--ink); background: var(--accent-03); }
+.segctl button[aria-pressed="true"] {
+  border-color: var(--accent); color: var(--accent); background: var(--accent-08);
+}
+.segctl button:disabled { color: var(--dim); cursor: not-allowed; opacity: 0.45; }
+@media (max-width: 480px) {
+  .segctl { grid-auto-flow: row; grid-template-columns: repeat(3, 1fr); grid-auto-columns: auto; }
+}
+
+/* ---------- toggle rows ---------- */
+.togglegrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 2px; }
+.togrow {
+  display: flex; align-items: center; gap: 10px;
+  min-height: 48px; padding: 10px 14px;
+  background: var(--panel); border: 1px solid var(--line-2);
+  /* Explicit, not inherited: the action variant is a <button>, and buttons default to
+     `color: buttontext` (black) rather than inheriting. The icons use currentColor, so
+     without this the self-clean icon renders black on the dark panel. */
+  color: var(--ink-2);
+  cursor: pointer; transition: var(--t);
+}
+.togrow:hover { border-color: #333; background: var(--accent-03); }
+.togrow .tlabel {
+  flex: 1; min-width: 0;
+  font-size: 0.62rem; font-weight: 900; letter-spacing: 1.2px;
+  text-transform: uppercase; color: var(--ink-2);
+}
+.togrow[data-on="1"] .tlabel, .togrow[data-on="1"] .ic { color: var(--accent); }
+.togrow[aria-disabled="true"] { opacity: 0.4; cursor: not-allowed; }
+
+/* The switch inside a row is decoration — the row owns the interaction. Paint the checked
+   look from the row's state instead of an :checked input (see the note in app.js). */
+.togrow .toggle { pointer-events: none; }
+.togrow[data-on="1"] .toggle .track { border-color: var(--accent); background: var(--accent-08); }
+.togrow[data-on="1"] .toggle .track::before {
+  transform: translateX(22px);
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+}
+
+/* ---------- scene / automation cards ---------- */
+.cardgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 2px; }
+
+.rule { display: flex; flex-direction: column; gap: 10px; }
+.rule .rulehead { display: flex; align-items: center; gap: 12px; }
+.rule .rulehead b {
+  flex: 1; min-width: 0;
+  font-size: 0.8rem; font-weight: 900; text-transform: uppercase; letter-spacing: 1px; color: var(--ink);
+}
+.rule p { font-size: 0.72rem; color: var(--ink-2); line-height: 1.6; }
+
+/* ojee-ui's .fieldline pins the value to one line (`white-space: nowrap; flex: none`) so the
+   dotted leader reads correctly for short values like "24 °C". An automation trigger is a
+   sentence, and these cards live in a responsive grid — at 768px a card is ~359px while the
+   sentence wants 461px, so it pushed the page wider than the viewport.
+   Not scoped to a breakpoint on purpose: the card width depends on the grid, not the screen,
+   so any max-width guess is wrong at some size. The leader survives for short values; a long
+   one simply wraps onto its own line. */
+.rule .fieldline { flex-wrap: wrap; }
+.rule .fieldline .fl-lead { min-width: 12px; }
+.rule .fieldline .fl-v {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  flex: 1 1 55%;
+  min-width: 0;
+  text-align: right;
+}
+
+/* an action capability (self-clean) is a button, not a switch — it starts something */
+.togrow--action { font-family: var(--mono); text-align: left; }
+.togrow--action:hover { border-color: var(--accent); }
+.togrow--action .meta { color: var(--accent); }
+
+/* the automations card switch is a plain element, painted from data-on (see app.js) */
+[data-automation] { cursor: pointer; flex: none; }
+[data-automation][data-on="1"] .track { border-color: var(--accent); background: var(--accent-08); }
+[data-automation][data-on="1"] .track::before {
+  transform: translateX(22px); background: var(--accent); box-shadow: 0 0 8px var(--accent);
+}
+
+/* ---------- editor ---------- */
+.modal { max-width: 560px; }
+.edev { border: 1px solid var(--line-2); padding: var(--s-3); margin-top: var(--s-2); }
+.edev + .edev { margin-top: var(--s-2); }
+.erow {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 9px 0; border-bottom: 1px solid var(--line-2);
+}
+.erow:last-child { border-bottom: 0; }
+.erow .check { flex: 0 0 128px; min-width: 0; }
+.erow .eval { flex: 1 1 200px; min-width: 0; }
+.erow.is-on .check span { color: var(--accent); }
+/* Compact segments inside the editor — the dialog is narrow and these are secondary. */
+.erow .segctl button { min-height: 36px; padding: 7px 6px; font-size: 0.56rem; letter-spacing: 0.8px; }
+@media (max-width: 560px) {
+  .erow .check { flex: 1 1 100%; }
+  .erow .eval { flex: 1 1 100%; }
+}
+
+.d-range { opacity: 0.7; margin-top: 2px; }
+
+/* ---------- activity ---------- */
+.logline { display: flex; align-items: baseline; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--line-2); font-size: 0.73rem; }
+.logline time { font-family: var(--hud); font-size: 0.6rem; letter-spacing: 0.12em; color: var(--dim); flex: none; }
+.logline .lmsg { flex: 1; min-width: 0; color: var(--ink-2); overflow-wrap: anywhere; }
+.logline .ldot { width: 6px; height: 6px; flex: none; background: var(--dim); }
+.logline.k-command .ldot { background: var(--accent); }
+.logline.k-scene   .ldot { background: var(--info); }
+.logline.k-automation .ldot { background: var(--chart-4); }
+.logline.k-error   .ldot { background: var(--err); }
+
+/* ---------- empty / skeleton ---------- */
+.empty { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: var(--s-5) var(--s-3); text-align: center; }
+.empty p { font-size: 0.75rem; color: var(--dim); max-width: 42ch; line-height: 1.7; }
+
+.skel { background: var(--line-2); animation: skelPulse 1.4s ease-in-out infinite; }
+@keyframes skelPulse { 0%, 100% { opacity: 0.45; } 50% { opacity: 0.9; } }
+
+/* offline / unconfigured banner sits above the fold, not buried in a card */
+.notice { margin-bottom: var(--s-3); }
+
+/* The drafting sheet header is a two-column baseline row; below ~560px the two halves
+   collide into each other, so stack them and drop the leader alignment. */
+@media (max-width: 560px) {
+  .sheet-header { flex-direction: column; align-items: flex-start; gap: 4px; }
+  .sheet-header .right { text-align: left; }
+  .sheet::before { inset: 4px; }
+  .sheet-inner { padding: var(--s-3); }
+  .titleblock { grid-template-columns: repeat(2, 1fr); }
+  .titleblock .tb:nth-child(2n) { border-right: 0; }
+  .titleblock .tb { border-bottom: 1px solid var(--line); }
+}
+
+/* Touch minimum. ojee-ui sizes .btn by padding, which lands at 40px on small screens —
+   just under the 44px floor. Raise only the hit box; the type and padding stay as designed. */
+@media (max-width: 860px), (pointer: coarse) {
+  .btn, .tab, .gate { min-height: 44px; }
+  .toggle { width: 48px; height: 26px; }
+  .toggle .track::before { width: 16px; height: 16px; top: 4px; left: 4px; }
+  /* 48 - 16 knob - 4 - 4 = 24px of travel at this size */
+  .toggle input:checked + .track::before,
+  .togrow[data-on="1"] .toggle .track::before { transform: translateX(24px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

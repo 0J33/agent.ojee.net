@@ -1,0 +1,15 @@
+{
+  "name": "ojee home",
+  "short_name": "home",
+  "description": "Local device control and automation.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#08080e",
+  "theme_color": "#08080e",
+  "icons": [
+    { "src": "/favicon.svg", "type": "image/svg+xml", "sizes": "any", "purpose": "any" },
+    { "src": "/icon-192.png", "type": "image/png", "sizes": "192x192" },
+    { "src": "/icon-512.png", "type": "image/png", "sizes": "512x512" },
+    { "src": "/apple-touch-icon.png", "type": "image/png", "sizes": "180x180" }
+  ]
+}
