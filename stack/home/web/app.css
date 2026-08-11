@@ -28,6 +28,21 @@
    Full-height column so the status bar sits on the viewport bottom when a page is short,
    instead of leaving a gap under it. */
 html, body { min-height: 100%; }
+
+/* ojee-ui paints `html` with two gradients and no background-COLOR. Gradients only cover the
+   document box, so momentum/rubber-band scrolling past either edge exposes the browser's
+   default canvas — a flash of white behind the real background.
+   Two fixes, both needed:
+     1. a solid base colour under the gradients, so any area they do not cover is still dark;
+     2. overscroll-behavior: none, which stops the bounce (and scroll chaining) outright.
+   color-scheme: dark additionally tells the browser to paint its own surfaces — scrollbars,
+   overscroll gutter, form controls — dark rather than light. */
+html {
+  background-color: #06060a;
+  overscroll-behavior: none;
+  color-scheme: dark;
+}
+body { overscroll-behavior: none; }
 body { display: flex; flex-direction: column; min-height: 100dvh; }
 .wrap { flex: 1 0 auto; }
 .statusbar { flex: none; }
