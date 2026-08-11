@@ -66,6 +66,43 @@ class Hub:
             self.devices[driver.id] = driver
             self._locks[driver.id] = asyncio.Lock()
 
+        self._apply_device_meta()
+
+    # ---- naming ---------------------------------------------------------
+    def _apply_device_meta(self) -> None:
+        """Overlay user-chosen names/rooms onto the drivers. Kept in the store rather than
+        the env so a rename survives a redeploy without editing compose."""
+        meta = self.store.get("device_meta") or {}
+        for device_id, driver in self.devices.items():
+            entry = meta.get(device_id) or {}
+            if entry.get("name"):
+                driver.name = entry["name"]
+            if entry.get("room") is not None:
+                driver.room = entry["room"]
+
+    def rename(self, device_id: str, name: str | None, room: str | None) -> dict[str, Any]:
+        if device_id not in self.devices:
+            raise KeyError(device_id)
+        meta = self.store.get("device_meta") or {}
+        entry = dict(meta.get(device_id) or {})
+        if name is not None:
+            cleaned = name.strip()
+            if not cleaned:
+                raise ValueError("name cannot be empty")
+            entry["name"] = cleaned[:40]
+        if room is not None:
+            entry["room"] = room.strip()[:40]
+        meta[device_id] = entry
+        self.store.set("device_meta", meta)
+        self._apply_device_meta()
+        device = self.devices[device_id]
+        self.store.log("rename", f"Renamed to '{device.name}'"
+                                 + (f" ({device.room})" if device.room else ""),
+                       "", SETTINGS.activity_limit)
+        payload = device.describe()
+        self.bus.publish("device", payload)
+        return payload
+
     # ---- lifecycle -----------------------------------------------------
     async def start(self) -> None:
         self._task = asyncio.create_task(self._loop())

@@ -231,6 +231,8 @@ function devicePanel(device) {
                     aria-pressed="${!!st.power}">${icon('i-power')} ${st.power ? 'On' : 'Off'}</button>
             <button class="btn btn--ghost btn--sm" data-refresh="${esc(device.id)}">
               ${icon('i-refresh')} Refresh</button>
+            <button class="btn btn--ghost btn--sm" data-rename="${esc(device.id)}">
+              ${icon('i-edit')} Rename</button>
           </div>
         </div>
         <div class="stack">
@@ -531,9 +533,44 @@ function triggerEditor(draft) {
   </div>`}`;
 }
 
+function renderDeviceEditor(ed) {
+  const d = ed.draft;
+  $('#modal-root').innerHTML = `
+  <div class="modal-backdrop" data-backdrop>
+    <div class="modal" role="dialog" aria-modal="true" aria-label="Rename device" style="max-width:440px">
+      <div class="modal-head"><span>Rename device</span>
+        <button class="btn btn--ghost btn--sm" data-close>Close</button></div>
+      <div class="modal-body">
+        <div class="stack">
+          <div class="field">
+            <label class="label" for="e-name">Name</label>
+            <input class="input" id="e-name" value="${esc(d.name || '')}" data-efield="name"
+                   placeholder="Living Room AC" maxlength="40">
+          </div>
+          <div class="field">
+            <label class="label" for="e-room">Room</label>
+            <input class="input" id="e-room" value="${esc(d.room || '')}" data-efield="room"
+                   placeholder="Living Room" maxlength="40">
+          </div>
+          <p class="hint">Stored in the hub, not in the container config — a rename survives
+            a redeploy. The device id (<code>${esc(d.id)}</code>) never changes, so scenes and
+            automations keep working.</p>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn--ghost" data-close>Cancel</button>
+        <button class="btn" data-save>Save</button>
+      </div>
+    </div>
+  </div>`;
+  const n = $('#e-name');
+  if (n) { n.focus(); n.select(); }
+}
+
 function renderEditor() {
   const ed = state.editor;
   if (!ed) { const n = $('#modal-root'); if (n) n.innerHTML = ''; return; }
+  if (ed.kind === 'device') { renderDeviceEditor(ed); return; }
   const isScene = ed.kind === 'scene';
   const d = ed.draft;
   $('#modal-root').innerHTML = `
@@ -636,6 +673,20 @@ async function saveEditor() {
   const ed = state.editor;
   const d = ed.draft;
   if (!d.name || !d.name.trim()) { toast('warn', 'Name required'); return; }
+
+  if (ed.kind === 'device') {
+    try {
+      const updated = await api(`/devices/${d.id}`, {
+        method: 'PATCH', body: JSON.stringify({ name: d.name, room: d.room || '' }),
+      });
+      const i = state.snapshot.devices.findIndex((x) => x.id === updated.id);
+      if (i >= 0) state.snapshot.devices[i] = updated;
+      closeEditor(); render();
+      toast('ok', 'Renamed', updated.name);
+    } catch (err) { toast('err', 'Rename failed', err.message); }
+    return;
+  }
+
   if (!d.actions || !d.actions.length) { toast('warn', 'Add at least one action'); return; }
 
   const key = ed.kind === 'scene' ? 'scenes' : 'automations';
@@ -793,6 +844,15 @@ document.addEventListener('click', async (ev) => {
   }
 
   // ----- device controls -----
+  const rename = t.closest('[data-rename]');
+  if (rename) {
+    const dev = deviceById(rename.dataset.rename);
+    state.editor = { kind: 'device', isNew: false,
+                     draft: { id: dev.id, name: dev.name, room: dev.room } };
+    renderEditor();
+    return;
+  }
+
   const refresh = t.closest('[data-refresh]');
   if (refresh) {
     try { await api(`/devices/${refresh.dataset.refresh}/refresh`, { method: 'POST' }); await refreshSnapshot(); toast('info', 'Refreshed'); }

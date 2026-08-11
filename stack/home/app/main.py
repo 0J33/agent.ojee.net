@@ -86,6 +86,19 @@ async def send_command(device_id: str, command: dict[str, Any] = Body(...)) -> d
         raise HTTPException(502, f"{type(exc).__name__}: {exc}") from exc
 
 
+@app.patch("/api/devices/{device_id}")
+async def rename_device(device_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    if device_id not in HUB.devices:
+        raise HTTPException(404, f"no device {device_id!r}")
+    name, room = body.get("name"), body.get("room")
+    if name is None and room is None:
+        raise HTTPException(400, "provide 'name' and/or 'room'")
+    try:
+        return HUB.rename(device_id, name, room)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
 @app.post("/api/devices/{device_id}/refresh")
 async def refresh_device(device_id: str) -> dict[str, Any]:
     if device_id not in HUB.devices:
