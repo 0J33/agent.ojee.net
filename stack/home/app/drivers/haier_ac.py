@@ -168,8 +168,17 @@ def build_capabilities(spec: Spec) -> list[Capability]:
         Capability("self_clean", "Self-clean", "action", icon="clean",
                    hint="Freezes then thaws the coil to flush dust off it. Runs to completion "
                         "and cannot be stopped."),
-        Capability("indoor_temperature", "Indoor", "readout", unit="°C", icon="indoor"),
-        Capability("outdoor_temperature", "Outdoor", "readout", unit="°C", icon="outdoor"),
+        Capability("indoor_temperature", "Indoor", "readout", unit="°C", icon="indoor",
+                   hint="Return-air sensor in the indoor unit."),
+        # Deliberately NOT called "Outdoor": this is a thermistor on the outdoor unit, next to
+        # the condenser coil — not a shaded ambient air sensor. With the compressor running it
+        # reads well above the real outside temperature (observed 37 °C against an actual 28 °C
+        # ambient), and it drifts up the longer the unit runs. The official app shows the same
+        # byte with a slightly different offset (101-64=37 here vs 101-66=35 there), so neither
+        # figure is the weather. Labelling it "Outdoor" invited exactly that misreading.
+        Capability("outdoor_temperature", "Outdoor unit", "readout", unit="°C", icon="outdoor",
+                   hint="Coil sensor on the outdoor unit, not outside air. Runs well above "
+                        "ambient whenever the compressor is on."),
     ]
 
 

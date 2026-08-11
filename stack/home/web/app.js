@@ -245,7 +245,8 @@ function devicePanel(device) {
 
       <div class="titleblock" style="margin-top:var(--s-4)">
         <div class="tb"><span class="tb-k">Indoor</span><span class="tb-v tb-v--accent">${num(st.indoor_temperature)}°C</span></div>
-        <div class="tb"><span class="tb-k">Outdoor</span><span class="tb-v">${num(st.outdoor_temperature)}°C</span></div>
+        <div class="tb" data-tip="Coil sensor on the outdoor unit — not outside air">
+          <span class="tb-k">Outdoor unit</span><span class="tb-v">${num(st.outdoor_temperature)}°C</span></div>
         <div class="tb"><span class="tb-k">Setpoint</span><span class="tb-v">${num(st.target_temperature, 0)}°C</span></div>
         <div class="tb"><span class="tb-k">Mode</span><span class="tb-v">${esc(labelFor(device, 'mode', st.mode))}</span></div>
         <div class="tb"><span class="tb-k">Fan</span><span class="tb-v">${esc(labelFor(device, 'fan', st.fan))}</span></div>
