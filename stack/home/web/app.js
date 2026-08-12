@@ -236,9 +236,7 @@ function devicePanel(device) {
           </div>
         </div>
         <div class="stack">
-          ${segmented(device, 'mode')}
-          ${segmented(device, 'fan')}
-          ${segmented(device, 'eco')}
+          ${device.capabilities.filter((c) => c.kind === 'enum').map((c) => segmented(device, c.key)).join('')}
           ${toggles(device)}
         </div>
       </div>

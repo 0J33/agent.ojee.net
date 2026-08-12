@@ -27,7 +27,7 @@ class DemoAC(Driver):
         self.spec = DEFAULT_SPEC
         self.state = {
             "power": False, "mode": "cool", "target_temperature": 23, "fan": "auto",
-            "swing_vertical": False, "swing_horizontal": False, "eco": "off",
+            "swing_vertical": "fixed", "swing_horizontal": "fixed", "eco": "off",
             "quiet": False, "turbo": False, "sleep": False, "health": False, "display": True,
             "self_cleaning": False,
             "indoor_temperature": 29.0, "outdoor_temperature": 34.0,

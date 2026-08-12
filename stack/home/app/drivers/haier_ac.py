@@ -39,6 +39,50 @@ MODE_ORDER = ["auto", "cool", "dry", "heat", "fan_only"]
 FAN_ORDER = ["auto", "low", "medium", "high"]
 ECO_ORDER = ["off", "level1", "level2", "level3"]
 
+# ---------------------------------------------------------------------------
+# Vane positions.
+#
+# The library pins both axes to off/on because only those two are confirmed on ITS reference
+# unit. Every intermediate code below was swept against this AC (HSU-12KCRIC(IN)) and echoed
+# back correctly, so all of them are hardware-confirmed here — a superset of the six the
+# Haismart app exposes per axis.
+#
+# Read-back lives in the grSetDAC baseline words, and the WriteField table's word numbers are
+# 1-BASED while the raw buffer is 0-based. Reading it literally returns 0 for every code,
+# including ones already known to work.
+#   vertical   -> words[0] low nibble  (also raw byte[93] low nibble)
+#   horizontal -> words[3] low 3 bits
+SWING_V_CODES = {"fixed": 0x00, "p1": 0x02, "p2": 0x04, "p3": 0x06,
+                 "p4": 0x08, "p5": 0x0A, "auto": 0x0C}
+SWING_H_CODES = {"fixed": 0, "p1": 1, "p2": 2, "p3": 3,
+                 "p4": 4, "p5": 5, "p6": 6, "auto": 7}
+SWING_V_ORDER = ["fixed", "p1", "p2", "p3", "p4", "p5", "auto"]
+SWING_H_ORDER = ["fixed", "p1", "p2", "p3", "p4", "p5", "p6", "auto"]
+SWING_LABELS = {"fixed": "Fix", "auto": "Auto", "p1": "1", "p2": "2", "p3": "3",
+                "p4": "4", "p5": "5", "p6": "6"}
+_V_FROM_CODE = {v: k for k, v in SWING_V_CODES.items()}
+_H_FROM_CODE = {v: k for k, v in SWING_H_CODES.items()}
+
+
+#: Widens `set_grsetdac_field`'s allowlist for the two MODEL_AUTHORIZED vane fields. Without
+#: this it only accepts the library's observed pair (0/12 and 0/7) and rejects every
+#: intermediate position with "neither an observed-valid value nor declared by the device's
+#: digital model". These are wire (EPP) values, which is what the parameter means — and each
+#: one was swept against this unit and echoed back before being listed here.
+_VANE_MODEL_VALUES = {
+    "windDirectionVertical": frozenset(SWING_V_CODES.values()),
+    "windDirectionHorizontal": frozenset(SWING_H_CODES.values()),
+}
+
+
+def vane_codes_from_blob(blob: bytes) -> tuple[int, int]:
+    """(vertical, horizontal) raw codes out of a status report."""
+    words = h.grsetdac_baseline_from_status(blob)
+    vertical = int.from_bytes(words[0:2], "big") & 0x0F
+    horizontal = int.from_bytes(words[6:8], "big") & 0x07
+    return vertical, horizontal
+
+
 #: our attribute name -> grSetDAC field, for the plain on/off controls
 _BOOL_FIELDS = {
     "power": "onOffStatus",
@@ -57,8 +101,6 @@ _READ_MAP = {
     "mode": "mode",
     "target_temperature": "target_temperature",
     "fan": "fan_mode",
-    "swing_vertical": "swing_vertical",
-    "swing_horizontal": "swing_horizontal",
     "turbo": "strong",
     "quiet": "quiet",
     "sleep": "sleep",
@@ -149,8 +191,19 @@ def build_capabilities(spec: Spec) -> list[Capability]:
             options=[{"value": f, "label": FAN_LABELS[f]} for f in spec.fans],
             needs_power=True, icon="fan",
         ),
-        Capability("swing_vertical", "Swing Vert", "switch", needs_power=True, icon="swing-v"),
-        Capability("swing_horizontal", "Swing Horiz", "switch", needs_power=True, icon="swing-h"),
+        Capability(
+            "swing_vertical", "Swing Vert", "enum",
+            options=[{"value": t, "label": SWING_LABELS[t]} for t in SWING_V_ORDER],
+            needs_power=True, icon="swing-v",
+            hint="Fix parks the louvre where it is; 1-5 are fixed stops top to bottom; "
+                 "Auto sweeps. All confirmed on this unit.",
+        ),
+        Capability(
+            "swing_horizontal", "Swing Horiz", "enum",
+            options=[{"value": t, "label": SWING_LABELS[t]} for t in SWING_H_ORDER],
+            needs_power=True, icon="swing-h",
+            hint="Fix parks the vane; 1-6 are fixed stops left to right; Auto sweeps.",
+        ),
         Capability(
             "eco", "Eco", "enum",
             options=[{"value": e, "label": ECO_LABELS[e]} for e in spec.eco],
@@ -214,7 +267,16 @@ def validate_ac_command(command: dict[str, Any], spec: Spec = DEFAULT_SPEC) -> d
             if not _as_bool(value):
                 raise CommandError("self_clean can only be started, not stopped")
             cleaned[key] = True
-        elif key in ("swing_vertical", "swing_horizontal") or key in _BOOL_FIELDS:
+        elif key in ("swing_vertical", "swing_horizontal"):
+            codes = SWING_V_CODES if key == "swing_vertical" else SWING_H_CODES
+            # Booleans still accepted: scenes saved while swing was a switch stay valid.
+            if isinstance(value, bool):
+                cleaned[key] = "auto" if value else "fixed"
+            elif str(value) in codes:
+                cleaned[key] = str(value)
+            else:
+                raise CommandError(f"{key} must be one of {list(codes)}")
+        elif key in _BOOL_FIELDS:
             cleaned[key] = _as_bool(value)
         else:
             raise KeyError(f"unknown attribute {key!r}")
@@ -244,7 +306,7 @@ class HaierAC(Driver):
         self._counter = 1
         self.state = {
             "power": False, "mode": "cool", "target_temperature": 24, "fan": "auto",
-            "swing_vertical": False, "swing_horizontal": False, "eco": "off",
+            "swing_vertical": "fixed", "swing_horizontal": "fixed", "eco": "off",
             "quiet": False, "turbo": False, "sleep": False, "health": False, "display": True,
             "self_cleaning": False,
             "indoor_temperature": None, "outdoor_temperature": None,
@@ -308,9 +370,10 @@ class HaierAC(Driver):
                 f"localKey did not decrypt — the AC is on localKey version {version}. "
                 "Keys rotate server-side; re-run ./fetch-key.sh."
             )
-        return h.parse_full_status(blobs[-1], self.profile)
+        blob = blobs[-1]
+        return h.parse_full_status(blob, self.profile), blob
 
-    def _ingest(self, status: dict[str, Any]) -> None:
+    def _ingest(self, status: dict[str, Any], blob: bytes | None = None) -> None:
         for ours, theirs in _READ_MAP.items():
             if theirs not in status or status[theirs] is None:
                 continue
@@ -334,6 +397,11 @@ class HaierAC(Driver):
                 int(eco) if not isinstance(eco, str) else -1, str(eco) if isinstance(eco, str) else "off"
             )
 
+        if blob is not None:
+            vertical, horizontal = vane_codes_from_blob(blob)
+            self.state["swing_vertical"] = _V_FROM_CODE.get(vertical, "fixed")
+            self.state["swing_horizontal"] = _H_FROM_CODE.get(horizontal, "fixed")
+
         # The unit tells us whether it can heat; regenerate the control surface from that so
         # the UI never offers a mode this hardware would refuse.
         heat = status.get("heat_capable")
@@ -348,7 +416,7 @@ class HaierAC(Driver):
             return
         loop = asyncio.get_running_loop()
         try:
-            status = await loop.run_in_executor(None, self._read_blocking)
+            status, blob = await loop.run_in_executor(None, self._read_blocking)
         except (OSError, socket.timeout):
             found = await loop.run_in_executor(None, self._rediscover)
             if not found:
@@ -357,14 +425,14 @@ class HaierAC(Driver):
                 return
             self.host = found
             try:
-                status = await loop.run_in_executor(None, self._read_blocking)
+                status, blob = await loop.run_in_executor(None, self._read_blocking)
             except Exception as exc:  # noqa: BLE001 - surfaced to the UI, must not kill the loop
                 self._mark_bad("error", f"{type(exc).__name__}: {exc}")
                 return
         except Exception as exc:  # noqa: BLE001
             self._mark_bad("error", f"{type(exc).__name__}: {exc}")
             return
-        self._ingest(status)
+        self._ingest(status, blob)
         self._mark_ok()
 
     # ---- write ---------------------------------------------------------
@@ -380,9 +448,9 @@ class HaierAC(Driver):
             elif key == "target_temperature":
                 pairs.append(("targetTemperature", value - 16))
             elif key == "swing_vertical":
-                pairs.append(("windDirectionVertical", 0x0C if value else 0x00))
+                pairs.append(("windDirectionVertical", SWING_V_CODES[value]))
             elif key == "swing_horizontal":
-                pairs.append(("windDirectionHorizontal", 0x07 if value else 0x00))
+                pairs.append(("windDirectionHorizontal", SWING_H_CODES[value]))
             elif key == "self_clean":
                 pairs.append(("selfCleaningStatus", 1))
             else:
@@ -401,7 +469,9 @@ class HaierAC(Driver):
                 raise RuntimeError("the AC did not push a status baseline to seed the change")
             words = h.grsetdac_baseline_from_status(status_blob)
             for field, epp in pairs:
-                words = h.set_grsetdac_field(words, field, epp)
+                words = h.set_grsetdac_field(
+                    words, field, epp, model_values=_VANE_MODEL_VALUES.get(field),
+                )
             return h.grsetdac_op_frame(words)
 
         replies = await h.async_send_op(
@@ -410,7 +480,7 @@ class HaierAC(Driver):
         self._counter += 1
         confirmed = [b for b in replies if h.derive_status_layout(b) is not None]
         if confirmed:
-            self._ingest(h.parse_full_status(confirmed[-1], self.profile))
+            self._ingest(h.parse_full_status(confirmed[-1], self.profile), confirmed[-1])
             self._mark_ok()
         else:
             # The write went out but the unit did not echo a decodable status. Apply
