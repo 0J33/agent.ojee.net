@@ -190,7 +190,12 @@ function vaneGlyph(axis, token, label) {
   const index = Number(token.slice(1));
   const total = axis === 'v' ? 5 : 6;
   const span = axis === 'v' ? 76 : 90;
-  const angle = -(span / 2) + (span * (index - 1)) / (total - 1);
+  // SVG rotate() is clockwise with y pointing down. The vertical arrow starts pointing right,
+  // so a negative angle lifts it — index 1 reads as "highest", which matches its label. The
+  // horizontal arrow starts pointing DOWN, where the same negative angle swings it to the
+  // RIGHT, i.e. the exact opposite of what index 1's label claims. Hence the flip.
+  const direction = axis === 'v' ? 1 : -1;
+  const angle = direction * (-(span / 2) + (span * (index - 1)) / (total - 1));
   return `${open}${unit}<g transform="rotate(${angle.toFixed(1)} ${pivot})"><path d="${arrow}"/></g></svg>`;
 }
 
@@ -216,8 +221,13 @@ const GLYPHS = {
 const GLYPH_TITLES = {
   swing_vertical: { fixed: 'Fixed — louvre parked, no sweep', auto: 'Auto — sweeps the full range',
     p1: 'Angle 1 — highest', p2: 'Angle 2', p3: 'Angle 3 — straight out', p4: 'Angle 4', p5: 'Angle 5 — lowest' },
+  // The protocol documents these only as "position one .. position eight" — it says nothing
+  // about which way the vane physically points. The order is real; the left/right reading is
+  // this UI's convention (1 = one end of the travel, 6 = the other). Flip `direction` above if
+  // the hardware turns out to run the other way.
   swing_horizontal: { fixed: 'Fixed — vane parked, no sweep', auto: 'Auto — sweeps the full range',
-    p1: 'Angle 1 — far left', p2: 'Angle 2', p3: 'Angle 3', p4: 'Angle 4', p5: 'Angle 5', p6: 'Angle 6 — far right' },
+    p1: 'Angle 1 — one end of the sweep', p2: 'Angle 2', p3: 'Angle 3', p4: 'Angle 4',
+    p5: 'Angle 5', p6: 'Angle 6 — the other end' },
   eco: { off: 'Eco off — full power', level1: 'Eco 1 — light power cap',
     level2: 'Eco 2 — medium power cap', level3: 'Eco 3 — hardest cap, slowest cooling' },
 };
