@@ -140,9 +140,12 @@ Capabilities are read from the device, not assumed. On the reference unit
 - **Setpoint** — the model profile advertises the protocol-wide 16–30 °C, but this unit's
   own remote only allows **20–28**, set via `AC_TEMP_MIN`/`AC_TEMP_MAX`.
 - **Fan** — auto / low / medium / high.
-- **Swing** — vertical and horizontal, on/off only. Intermediate louvre positions exist in
-  the protocol but need the device's digital model to authorise them, and this one declares
-  none, so offering them would produce controls the AC refuses.
+- **Swing** — full position control on both axes: vertical `fixed, 1-5, auto` and horizontal
+  `fixed, 1-6, auto`. Every code was swept against this unit and echoed back, so all are
+  hardware-confirmed — a superset of the six per axis the Haismart app exposes. Two traps:
+  `set_grsetdac_field` needs `model_values` to accept anything beyond its observed 0/12 and
+  0/7, and the `WriteField` word numbers are 1-based while the raw buffer is 0-based (reading
+  it literally reports 0 for every code, including ones known to work).
 - **Eco** — off / 1 / 2 / 3. Each level caps the compressor current harder: higher saves
   more power and cools more slowly.
 - **Self-clean** — start-only (the cycle runs to completion, there is no stop command), so
