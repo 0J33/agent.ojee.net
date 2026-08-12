@@ -18,6 +18,7 @@ from .config import SETTINGS
 from .drivers.base import Driver
 from .drivers.demo import DemoAC
 from .drivers.haier_ac import HaierAC
+from .keyfetch import KeyFetcher, KeyFetchError
 from .store import Store
 
 
@@ -56,6 +57,8 @@ class Hub:
         self.started_at = time.time()
         self._tz = ZoneInfo(SETTINGS.timezone)
         self._fired: dict[str, str] = {}   # automation id -> last fired minute/edge marker
+        self.keys = KeyFetcher(SETTINGS.account.username, SETTINGS.account.password,
+                               SETTINGS.account.region)
 
         for cfg in SETTINGS.acs:
             driver: Driver
@@ -67,6 +70,58 @@ class Hub:
             self._locks[driver.id] = asyncio.Lock()
 
         self._apply_device_meta()
+        self._apply_stored_keys()
+
+    # ---- local keys -----------------------------------------------------
+    def _apply_stored_keys(self) -> None:
+        """Prefer a key this hub fetched over the one in the environment.
+
+        The env value is the seed; once a rotation has been healed, the fetched key is the
+        current one and the env value is stale. But an operator who edits AC_LOCAL_KEY by hand
+        must still win — so the env value in force when we stored is recorded alongside, and a
+        change to it hands control back to the environment.
+        """
+        stored = self.store.get("local_keys") or {}
+        for device_id, driver in self.devices.items():
+            entry = stored.get(device_id)
+            if not entry or not isinstance(driver, HaierAC):
+                continue
+            if entry.get("seeded_from") != driver.local_key:
+                continue        # AC_LOCAL_KEY was edited since — the environment wins
+            driver.local_key = entry["key"]
+            driver.localkey_version = entry.get("version")
+
+    async def _heal_key(self, device_id: str) -> bool:
+        """Fetch a fresh localKey for a device whose stored one no longer decrypts.
+
+        Returns True only when a genuinely different key was obtained, so a caller can retry
+        exactly once and not loop on an unchanged one.
+        """
+        driver = self.devices.get(device_id)
+        if not isinstance(driver, HaierAC):
+            return False
+        try:
+            key, version = await self.keys.fetch(driver.device_id)
+        except KeyFetchError as exc:
+            # Backoff is expected and self-resolving; logging it every poll would bury the
+            # real failures under identical "rate-limited" rows.
+            if not exc.transient:
+                self.store.log("error", f"Could not refresh {driver.name}'s key", str(exc),
+                               SETTINGS.activity_limit)
+            return False
+        if key == driver.local_key:
+            return False
+        stored = self.store.get("local_keys") or {}
+        stored[device_id] = {"key": key, "version": version,
+                             "seeded_from": stored.get(device_id, {}).get("seeded_from")
+                             or driver.local_key}
+        self.store.set("local_keys", stored)
+        driver.local_key = key
+        driver.localkey_version = version
+        self.store.log("key", f"{driver.name}: fetched a fresh local key (v{version})", "",
+                       SETTINGS.activity_limit)
+        self.bus.publish("activity", self.store.get("activity")[:1])
+        return True
 
     # ---- naming ---------------------------------------------------------
     def _apply_device_meta(self) -> None:
@@ -137,6 +192,10 @@ class Hub:
         previous = (device.available, dict(device.state))
         async with self._locks[device_id]:
             await device.refresh()
+            # A rotated key is not a fault — fetch a new one and read again in the same slot,
+            # so an app-triggered rotation heals within one poll instead of waiting for a human.
+            if device.status == "key_rotated" and await self._heal_key(device_id):
+                await device.refresh()
         if previous != (device.available, dict(device.state)):
             self.bus.publish("device", device.describe())
 
@@ -145,7 +204,15 @@ class Hub:
             raise KeyError(device_id)
         device = self.devices[device_id]
         async with self._locks[device_id]:
-            await device.apply(command)
+            try:
+                await device.apply(command)
+            except Exception:
+                # A stale key surfaces here as "the AC did not push a status baseline" — the
+                # write goes out but nothing decrypts. Heal and retry once so pressing On from
+                # the website works straight after a rotation instead of erroring.
+                if not await self._heal_key(device_id):
+                    raise
+                await device.apply(command)
         self._settle_until = time.time() + SETTINGS.settle_seconds
         summary = ", ".join(f"{k}={v}" for k, v in command.items())
         self.store.log("command", f"{device.name}: {summary}", "", SETTINGS.activity_limit)

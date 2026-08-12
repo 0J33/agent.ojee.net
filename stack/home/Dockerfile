@@ -11,7 +11,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Vendored rather than pulled from git at build time: the build stays reproducible and the
 # image does not need git or network access to a third-party repo.
+#   haismart_hrdp      — the LAN protocol, used on every poll and command
+#   haismart_extractor — the cloud client, used only to re-fetch a rotated localKey
 COPY vendor/haismart_hrdp /app/haismart_hrdp
+COPY vendor/haismart_extractor /app/haismart_extractor
 COPY app /app/app
 COPY web /app/web
 

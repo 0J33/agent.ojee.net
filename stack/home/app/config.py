@@ -45,6 +45,17 @@ class ACConfig:
 
 
 @dataclass(frozen=True)
+class HaierAccount:
+    """Credentials used ONLY to re-fetch a rotated localKey. Kept in the environment (so in
+    the gitignored stack/.env), never in the repo and never written to the hub's data file."""
+
+    username: str = _env("HAIER_USERNAME", "")
+    password: str = _env("HAIER_PASSWORD", "")
+    # Dialling code of the country the ACCOUNT was registered in, not where the AC hangs.
+    region: str = _env("HAIER_REGION", "20")
+
+
+@dataclass(frozen=True)
 class Settings:
     host: str = _env("HUB_BIND", "0.0.0.0")
     port: int = _env_int("HUB_PORT", 8110)
@@ -66,6 +77,7 @@ class Settings:
     demo: bool = _env("HUB_DEMO", "0") == "1"
 
     acs: tuple[ACConfig, ...] = field(default_factory=lambda: (ACConfig(),))
+    account: HaierAccount = field(default_factory=HaierAccount)
 
 
 SETTINGS = Settings()

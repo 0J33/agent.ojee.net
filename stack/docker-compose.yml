@@ -132,6 +132,12 @@ services:
       # (the protocol-wide 16..30); this AC's own remote only allows 20..28.
       - AC_TEMP_MIN=${AC_TEMP_MIN:-}
       - AC_TEMP_MAX=${AC_TEMP_MAX:-}
+      # Account used ONLY to re-fetch a rotated localKey. Haier rotates it server-side and
+      # the trigger is undocumented, so the hub heals itself rather than waiting for a human.
+      # Leave blank to keep the manual ./fetch-key.sh flow.
+      - HAIER_USERNAME=${HAIER_USERNAME:-}
+      - HAIER_PASSWORD=${HAIER_PASSWORD:-}
+      - HAIER_REGION=${HAIER_REGION:-20}
     volumes:
       - home_data:/data
 

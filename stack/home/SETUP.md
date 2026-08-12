@@ -52,6 +52,32 @@ scenes and automations stay usable. It is labelled: the top bar reads `SIMULATED
 device's Link field reads `simulated`. Setting the key is the only change needed to make it
 real; nothing else in the config or the UI changes.
 
+## Automatic key refresh
+
+Haier rotates the localKey server-side. The trigger is not documented — a scheduled auto-off
+through the official app did it here, taking the unit from key version 3 to 4 — so the hub
+does not try to predict *when*. It reacts to the fact: any read or command that fails to
+decrypt triggers a cloud re-fetch and one retry. A rotation now heals inside a single poll,
+whether it was the app, a schedule, or something else that caused it.
+
+Set the account in `stack/.env` to enable it:
+
+```ini
+HAIER_USERNAME=you@example.com
+HAIER_PASSWORD=...
+HAIER_REGION=20
+```
+
+Leave them blank to keep the manual `./fetch-key.sh` flow instead.
+
+The password is only ever read from the environment — it is never written to the hub's data
+file and never leaves the box except to Haier's own login endpoint. The fetched *device* key
+is persisted to `/data/hub.json` so a restart does not need another round trip; it records the
+`AC_LOCAL_KEY` that seeded it, so editing that variable by hand still takes precedence.
+
+Fetches are rate-limited to one per 5 minutes and stop after 3 consecutive failures, so a
+wrong password cannot turn the poll loop into a login-attempt flood.
+
 ## Freezing the key
 
 The key rotates server-side. To make it permanent, block the AC's outbound internet at the
