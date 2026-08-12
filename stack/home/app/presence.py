@@ -23,6 +23,10 @@ from typing import Any
 STALE_AFTER_SECONDS = 3600.0
 #: Reject wildly imprecise fixes rather than let them flip presence.
 MAX_ACCURACY_METRES = 500.0
+#: Leaving needs more distance than arriving did. Without this gap a fix hovering on the zone
+#: edge — which is exactly what GPS does indoors — flips home/away repeatedly, and every flip
+#: fires the automations. Entry stays at the zone radius; exit is this much further out.
+EXIT_HYSTERESIS = 1.35
 
 
 def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -42,6 +46,7 @@ class Presence:
         self.store = store
         self.last_fix: dict[str, Any] | None = self.store.get("last_fix")
         self.current: str = self.store.get("presence") or "unknown"
+        self._changed_at = 0.0
 
     # ---- zones ---------------------------------------------------------
     def zones(self) -> list[dict[str, Any]]:
@@ -63,13 +68,18 @@ class Presence:
         return cleaned
 
     def zone_for(self, lat: float, lon: float) -> str | None:
-        """The first zone containing this point, nearest first."""
+        """The zone this point is in, nearest first.
+
+        The zone we are currently in gets a wider boundary than the others, so stepping just
+        over the line does not immediately count as leaving. Only a clear departure does.
+        """
         candidates = []
         for z in self.zones():
             if z.get("lat") is None or z.get("lon") is None:
                 continue
             distance = haversine_m(lat, lon, z["lat"], z["lon"])
-            if distance <= z["radius"]:
+            limit = z["radius"] * (EXIT_HYSTERESIS if z["id"] == self.current else 1.0)
+            if distance <= limit:
                 candidates.append((distance, z["id"]))
         candidates.sort()
         return candidates[0][1] if candidates else None
@@ -115,9 +125,19 @@ class Presence:
         return (None, None)
 
     def _apply(self, zone_id: str) -> tuple[str | None, str | None]:
+        """Record a zone change and report it so the automations can run.
+
+        There is deliberately NO rate limit here. A first attempt debounced changes inside a
+        20s window, which collapsed bursts — but it also silently swallowed a real departure
+        that happened to follow another change closely, leaving presence correct while the
+        "leave" automation never ran. Losing a real event is worse than the flapping it
+        prevented, and the flapping's actual cause (a fix sitting on the zone edge) is handled
+        properly by EXIT_HYSTERESIS above.
+        """
         if zone_id == self.current:
             return (None, None)
         previous, self.current = self.current, zone_id
+        self._changed_at = time.time()
         self.store.set("presence", zone_id)
         return (previous, zone_id)
 
