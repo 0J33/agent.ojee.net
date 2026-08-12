@@ -410,9 +410,11 @@ function viewOverview() {
       <div class="panel corners"><i class="c"></i><div class="stat"><span class="label">Devices</span>
         <span class="value">${online}<span style="font-size:1rem;color:var(--dim)">/${s.devices.length}</span></span>
         <span class="meta">online</span></div></div>
-      <div class="panel corners"><i class="c"></i><div class="stat"><span class="label">Uptime</span>
-        <span class="value">${Math.floor(s.hub.uptime / 3600)}<span style="font-size:1rem;color:var(--dim)">h</span></span>
-        <span class="meta">${esc(s.hub.timezone)}</span></div></div>
+      <div class="panel corners"><i class="c"></i><div class="stat"><span class="label">Phone</span>
+        <span class="value" style="font-size:1.5rem">${esc((s.presence || {}).zone_name || 'unknown')}</span>
+        <span class="meta">${(s.presence || {}).last_fix
+          ? (s.presence.fresh ? 'reporting' : 'stale fix')
+          : 'no reports yet'}</span></div></div>
     </div>
 
     <div>
@@ -497,6 +499,11 @@ function viewScenes() {
 function describeTrigger(t) {
   if (!t) return '';
   if (t.type === 'time') return `Every day at ${t.at}`;
+  if (t.type === 'presence') {
+    const zones = ((state.snapshot || {}).presence || {}).zones || [];
+    const zone = zones.find((z) => z.id === t.zone);
+    return `When I ${t.event === 'leave' ? 'leave' : 'arrive at'} ${zone ? zone.name : (t.zone || 'home')}`;
+  }
   if (t.type === 'state') {
     const dev = deviceById(t.device);
     const attr = (TRIGGER_ATTRS.find((a) => a.value === t.attribute) || {}).label
@@ -633,8 +640,24 @@ function triggerEditor(draft) {
     <div class="segctl" role="group" aria-label="Trigger type">
       <button data-ttype="time"  aria-pressed="${t.type === 'time'}">Time of day</button>
       <button data-ttype="state" aria-pressed="${t.type === 'state'}">Reading crosses</button>
+      <button data-ttype="presence" aria-pressed="${t.type === 'presence'}">I arrive / leave</button>
     </div>
   </div>
+  ${t.type === 'presence' ? `
+  <div class="field">
+    <span class="label">When</span>
+    <div class="segctl" role="group" aria-label="Arrive or leave">
+      <button data-pevent="enter" aria-pressed="${t.event !== 'leave'}">I arrive</button>
+      <button data-pevent="leave" aria-pressed="${t.event === 'leave'}">I leave</button>
+    </div>
+  </div>
+  <div class="field">
+    <label class="label" for="t-zone">Place</label>
+    <select class="select" id="t-zone" data-tfield="zone">
+      ${(((state.snapshot || {}).presence || {}).zones || [{ id: 'home', name: 'Home' }])
+        .map((z) => `<option value="${esc(z.id)}" ${t.zone === z.id ? 'selected' : ''}>${esc(z.name)}</option>`).join('')}
+    </select>
+  </div>` : ''}
   ${t.type === 'time' ? `
   <div class="field">
     <label class="label" for="t-at">At</label>
@@ -897,11 +920,17 @@ document.addEventListener('click', async (ev) => {
 
     const ttype = t.closest('[data-ttype]');
     if (ttype) {
-      state.editor.draft.trigger = ttype.dataset.ttype === 'time'
+      const kind = ttype.dataset.ttype;
+      state.editor.draft.trigger = kind === 'time'
         ? { type: 'time', at: '08:00' }
+        : kind === 'presence'
+        ? { type: 'presence', event: 'enter',
+            zone: ((((state.snapshot || {}).presence || {}).zones || [])[0] || {}).id || 'home' }
         : { type: 'state', device: (devices()[0] || {}).id, attribute: 'indoor_temperature', above: 30 };
       renderEditor(); return;
     }
+    const pevent = t.closest('[data-pevent]');
+    if (pevent) { state.editor.draft.trigger.event = pevent.dataset.pevent; renderEditor(); return; }
     const tdir = t.closest('[data-tdir]');
     if (tdir) {
       const tr = state.editor.draft.trigger;
@@ -1108,6 +1137,9 @@ function connectStream() {
     } else if (message.event === 'activity') {
       state.snapshot.activity = [...message.data, ...(state.snapshot.activity || [])].slice(0, 60);
       if (state.view === 'activity' || state.view === 'overview') render();
+    } else if (message.event === 'presence') {
+      state.snapshot.presence = message.data;
+      render();
     } else if (message.event === 'scenes' || message.event === 'automations') {
       state.snapshot[message.event] = message.data;
       render();

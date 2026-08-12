@@ -7,7 +7,7 @@ import time
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import Body, FastAPI, HTTPException
+from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -155,6 +155,71 @@ async def toggle_automation(automation_id: str) -> Any:
     HUB.store.set("automations", automations)
     HUB.bus.publish("automations", automations)
     return automations
+
+
+# ---- presence ------------------------------------------------------------
+def _location_authorised(request) -> bool:
+    """OwnTracks can send HTTP Basic or a bearer token; accept either, plus ?token= for a
+    quick curl. Blank HOME_LOCATION_TOKEN disables the check — the hub is tailnet-only."""
+    token = SETTINGS.location_token
+    if not token:
+        return True
+    if request.query_params.get("token") == token:
+        return True
+    header = request.headers.get("authorization", "")
+    if header.startswith("Bearer ") and header[7:] == token:
+        return True
+    if header.startswith("Basic "):
+        import base64
+        try:
+            decoded = base64.b64decode(header[6:]).decode("utf-8", "replace")
+        except Exception:  # noqa: BLE001
+            return False
+        return decoded.split(":", 1)[-1] == token
+    return False
+
+
+@app.post("/api/location")
+async def ingest_location(request: Request, payload: dict[str, Any] = Body(...)) -> Any:
+    """OwnTracks HTTP endpoint. Returns a JSON array, which is what the app expects."""
+    if not _location_authorised(request):
+        raise HTTPException(401, "bad or missing location token")
+    await HUB.ingest_location(payload)
+    return []
+
+
+@app.get("/api/presence")
+async def get_presence() -> Any:
+    return HUB.presence.describe()
+
+
+@app.get("/api/zones")
+async def get_zones() -> Any:
+    return HUB.presence.zones()
+
+
+@app.put("/api/zones")
+async def put_zones(zones: list[dict[str, Any]] = Body(...)) -> Any:
+    saved = HUB.presence.set_zones(zones)
+    HUB.bus.publish("presence", HUB.presence.describe())
+    return saved
+
+
+@app.post("/api/zones/from-fix")
+async def zone_from_fix(body: dict[str, Any] = Body(...)) -> Any:
+    """Pin a zone to wherever the phone last reported. Saves anyone having to look up
+    coordinates by hand — walk into the room, tap the button."""
+    fix = HUB.presence.last_fix
+    if not fix:
+        raise HTTPException(409, "no position reported yet — send one location from the phone first")
+    name = str(body.get("name") or "Home").strip() or "Home"
+    zones = [z for z in HUB.presence.zones() if z["name"].lower() != name.lower()]
+    zones.append({"id": name.lower().replace(" ", "-"), "name": name,
+                  "lat": fix["lat"], "lon": fix["lon"],
+                  "radius": float(body.get("radius") or 150)})
+    saved = HUB.presence.set_zones(zones)
+    HUB.bus.publish("presence", HUB.presence.describe())
+    return saved
 
 
 # ---- activity ------------------------------------------------------------

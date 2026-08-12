@@ -78,6 +78,46 @@ is persisted to `/data/hub.json` so a restart does not need another round trip; 
 Fetches are rate-limited to one per 5 minutes and stop after 3 consecutive failures, so a
 wrong password cannot turn the poll loop into a login-attempt flood.
 
+## Phone presence (location automations)
+
+The phone reports its own position to the hub. No Apple Shortcuts, no third-party cloud, and
+nothing to pay for.
+
+**On the phone:** install **OwnTracks** (free, open source, iOS and Android), then
+Settings -> Connection:
+
+| Field | Value |
+|---|---|
+| Mode | HTTP (Private) |
+| URL | `https://home.ojee.net/api/location?token=<HOME_LOCATION_TOKEN>` |
+| Device ID / Tracker ID | anything short, e.g. `oj` |
+| Authentication | off (the token is in the URL) — or set User/Password with the token as the password |
+
+The hub is tailnet-only, so Tailscale must be running on the phone. That is the whole point:
+the position never leaves your own machines.
+
+**Then create the zone.** Stand at home, let OwnTracks send one report (the app's "publish"
+button forces it), and:
+
+```bash
+curl -s -X POST https://home.ojee.net/api/zones/from-fix \
+  -H 'Content-Type: application/json' -d '{"name":"Home","radius":150}'
+```
+
+That pins the zone to wherever the phone just was — no looking up coordinates.
+
+**Better still, add the same region in OwnTracks** (Regions -> +, name it exactly `Home`).
+iOS then does the geofencing in its own region-monitoring service: it fires enter/leave the
+moment you cross the boundary, costs almost no battery, and works with the app closed. The hub
+treats those `transition` reports as authoritative and computes zones from raw fixes only as a
+fallback.
+
+Automations gain an **"I arrive / leave"** trigger. Presence changes run their automations
+immediately rather than waiting for the next poll, so arriving home does not take 45 seconds.
+
+A fix with worse than 500 m accuracy is ignored rather than allowed to flip presence, and a
+fix older than an hour is reported as stale rather than as current.
+
 ## Freezing the key
 
 The key rotates server-side. To make it permanent, block the AC's outbound internet at the

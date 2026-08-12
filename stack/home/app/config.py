@@ -76,6 +76,10 @@ class Settings:
     # UI work without touching real hardware.
     demo: bool = _env("HUB_DEMO", "0") == "1"
 
+    # Shared secret for the phone's location posts. The hub is already tailnet-only, so this
+    # is a second lock rather than the only one; blank disables the check.
+    location_token: str = _env("HOME_LOCATION_TOKEN", "")
+
     acs: tuple[ACConfig, ...] = field(default_factory=lambda: (ACConfig(),))
     account: HaierAccount = field(default_factory=HaierAccount)
 

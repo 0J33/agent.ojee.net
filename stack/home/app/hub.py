@@ -19,6 +19,7 @@ from .drivers.base import Driver
 from .drivers.demo import DemoAC
 from .drivers.haier_ac import HaierAC
 from .keyfetch import KeyFetcher, KeyFetchError
+from .presence import Presence
 from .store import Store
 
 
@@ -59,6 +60,7 @@ class Hub:
         self._fired: dict[str, str] = {}   # automation id -> last fired minute/edge marker
         self.keys = KeyFetcher(SETTINGS.account.username, SETTINGS.account.password,
                                SETTINGS.account.region)
+        self.presence = Presence(self.store)
 
         for cfg in SETTINGS.acs:
             driver: Driver
@@ -296,6 +298,48 @@ class Hub:
                            SETTINGS.activity_limit)
             self.bus.publish("activity", self.store.get("activity")[:1])
 
+    # ---- presence -------------------------------------------------------
+    async def ingest_location(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """One report from the phone. Presence changes fire their automations immediately
+        rather than waiting for the next poll — arriving home should not take 45 seconds."""
+        previous, current = self.presence.ingest(payload)
+        snapshot = self.presence.describe()
+        self.bus.publish("presence", snapshot)
+        if current is None:
+            return snapshot
+        self.store.log("presence", f"Phone: {previous or 'unknown'} \u2192 {current}", "",
+                       SETTINGS.activity_limit)
+        self.bus.publish("activity", self.store.get("activity")[:1])
+        await self._run_presence_automations(previous, current)
+        return snapshot
+
+    async def _run_presence_automations(self, previous: str | None, current: str) -> None:
+        for rule in self.store.get("automations") or []:
+            if not rule.get("enabled"):
+                continue
+            trigger = rule.get("trigger") or {}
+            if trigger.get("type") != "presence":
+                continue
+            zone = trigger.get("zone") or "home"
+            event = trigger.get("event") or "enter"
+            hit = (event == "enter" and current == zone) or (event == "leave" and previous == zone
+                                                             and current != zone)
+            if not hit:
+                continue
+            merged: dict[str, dict[str, Any]] = {}
+            for action in rule.get("actions", []):
+                merged.setdefault(action["device"], {}).update(action.get("command", {}))
+            for device_id, command in merged.items():
+                if device_id in self.devices:
+                    try:
+                        await self.command(device_id, command)
+                    except Exception as exc:  # noqa: BLE001
+                        self.store.log("error", f"Automation '{rule['name']}' failed", str(exc),
+                                       SETTINGS.activity_limit)
+            self.store.log("automation", f"Automation '{rule['name']}' ran (presence)", "",
+                           SETTINGS.activity_limit)
+            self.bus.publish("activity", self.store.get("activity")[:1])
+
     # ---- snapshot ------------------------------------------------------
     def snapshot(self) -> dict[str, Any]:
         return {
@@ -303,6 +347,7 @@ class Hub:
             "scenes": self.store.get("scenes"),
             "automations": self.store.get("automations"),
             "activity": (self.store.get("activity") or [])[:60],
+            "presence": self.presence.describe(),
             "hub": {
                 "uptime": time.time() - self.started_at,
                 "timezone": SETTINGS.timezone,

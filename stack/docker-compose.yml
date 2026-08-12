@@ -138,6 +138,9 @@ services:
       - HAIER_USERNAME=${HAIER_USERNAME:-}
       - HAIER_PASSWORD=${HAIER_PASSWORD:-}
       - HAIER_REGION=${HAIER_REGION:-20}
+      # Shared secret the phone sends with each location post. The hub is already tailnet-only,
+      # so this is a second lock rather than the only one; blank disables the check.
+      - HOME_LOCATION_TOKEN=${HOME_LOCATION_TOKEN:-}
     volumes:
       - home_data:/data
 
