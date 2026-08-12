@@ -139,20 +139,96 @@ function dial(device) {
   </div>`;
 }
 
+
+/* ============================================================
+   Visual encoding for controls whose names carry no meaning.
+   "Eco 2" and "Swing 3" tell you nothing; a picture of the louvre
+   angle and a power-limit meter do. Every glyph still carries an
+   aria-label and a tooltip — an icon-only control without an
+   accessible name is unusable with a screen reader.
+   ============================================================ */
+
+/** The louvre blade at the angle this position parks it, over a fixed vent reference.
+    Blade + vent, no arrowhead: at 26px an arrowhead adds pixels without adding signal, and
+    the tilt of a plain bar against a fixed one is what actually reads at a glance. */
+function vaneGlyph(axis, token, label) {
+  const open = `<svg class="ic vane" viewBox="0 0 28 28" role="img" aria-label="${esc(label)}">`;
+  const vent = axis === 'v'
+    ? '<path class="vent" d="M5 5h18"/>'
+    : '<path class="vent" d="M5 5v18"/>';
+
+  if (token === 'fixed') {
+    const blade = axis === 'v' ? 'M8 15h12' : 'M15 8v12';
+    const stop = axis === 'v' ? 'M11 21h6' : 'M21 11v6';
+    return `${open}${vent}<path d="${blade}"/><path class="vent" d="${stop}"/></svg>`;
+  }
+  if (token === 'auto') {
+    // the whole range at once: three blades fanned
+    const fan = axis === 'v'
+      ? ['rotate(-38 14 11)', 'rotate(0 14 11)', 'rotate(38 14 11)'].map(
+          (r) => `<path d="M8 15h12" transform="${r}"/>`).join('')
+      : ['rotate(-38 11 14)', 'rotate(0 11 14)', 'rotate(38 11 14)'].map(
+          (r) => `<path d="M15 8v12" transform="${r}"/>`).join('');
+    return `${open}${vent}${fan}</svg>`;
+  }
+
+  const index = Number(token.slice(1));
+  const total = axis === 'v' ? 5 : 6;
+  const angle = -52 + (104 * (index - 1)) / (total - 1);
+  const blade = axis === 'v' ? 'M8 15h12' : 'M15 8v12';
+  const pivot = axis === 'v' ? '14 11' : '11 14';
+  return `${open}${vent}<path d="${blade}" transform="rotate(${angle.toFixed(1)} ${pivot})"/></svg>`;
+}
+
+/** Eco as what it is: a power cap. Taller bars = harder limit = slower cooling. */
+function ecoGlyph(token, label) {
+  const level = token === 'off' ? 0 : Number(token.slice(-1));
+  const bars = [0, 1, 2].map((i) =>
+    `<rect x="${6 + i * 7}" y="${20 - i * 5}" width="4" height="${5 + i * 5}"
+       class="ecobar${i < level ? ' on' : ''}"/>`).join('');
+  return `<svg class="ic" viewBox="0 0 28 28" role="img" aria-label="${esc(label)}">
+    ${bars}${level === 0 ? '<path class="vent" d="M5 23L24 5"/>' : ''}</svg>`;
+}
+
+const GLYPHS = {
+  swing_vertical: (t, l) => vaneGlyph('v', t, l),
+  swing_horizontal: (t, l) => vaneGlyph('h', t, l),
+  eco: ecoGlyph,
+};
+
+/** Short caption under each glyph, and the accessible name / tooltip.
+    The glyph carries the meaning; the caption keeps the precision — five blade angles
+    25 degrees apart are not reliably tellable apart from the mark alone. */
+const GLYPH_TITLES = {
+  swing_vertical: { fixed: 'Fixed — louvre parked, no sweep', auto: 'Auto — sweeps the full range',
+    p1: 'Angle 1 — highest', p2: 'Angle 2', p3: 'Angle 3 — straight out', p4: 'Angle 4', p5: 'Angle 5 — lowest' },
+  swing_horizontal: { fixed: 'Fixed — vane parked, no sweep', auto: 'Auto — sweeps the full range',
+    p1: 'Angle 1 — far left', p2: 'Angle 2', p3: 'Angle 3', p4: 'Angle 4', p5: 'Angle 5', p6: 'Angle 6 — far right' },
+  eco: { off: 'Eco off — full power', level1: 'Eco 1 — light power cap',
+    level2: 'Eco 2 — medium power cap', level3: 'Eco 3 — hardest cap, slowest cooling' },
+};
+
 function segmented(device, key) {
   const cap = capOf(device, key);
   if (!cap || cap.kind !== 'enum') return '';
   const disabled = !device.available || (cap.needs_power && !device.state.power);
+  const glyph = GLYPHS[key];
+  const titles = GLYPH_TITLES[key] || {};
   return `
   <div class="field">
     <span class="label">${esc(cap.label)}</span>
-    <div class="segctl" role="group" aria-label="${esc(cap.label)}">
-      ${cap.options.map((o) => `
-        <button data-set="${key}" data-value="${esc(o.value)}"
+    <div class="segctl${glyph ? ' segctl--glyph' : ''}" role="group" aria-label="${esc(cap.label)}">
+      ${cap.options.map((o) => {
+        const title = titles[o.value] || o.label;
+        const body = glyph
+          ? `${glyph(o.value, title)}<span class="seglabel">${esc(o.label)}</span>`
+          : esc(o.label);
+        return `<button data-set="${key}" data-value="${esc(o.value)}"
                 aria-pressed="${device.state[key] === o.value}"
-                ${disabled ? 'disabled' : ''}>${esc(o.label)}</button>`).join('')}
+                ${glyph ? `aria-label="${esc(title)}" data-tip="${esc(title)}"` : ''}
+                ${disabled ? 'disabled' : ''}>${body}</button>`;
+      }).join('')}
     </div>
-    ${cap.hint ? `<p class="hint">${esc(cap.hint)}</p>` : ''}
   </div>`;
 }
 
@@ -210,7 +286,13 @@ function devicePanel(device) {
     <div class="sheet-inner">
       <div class="sheet-header">
         <span>dwg <b>${esc(device.id)}</b> · <em>${esc(device.name)}</em></span>
-        <span class="right">${esc(device.room || 'unassigned')} · ${esc(t.type_id || 'generic')}</span>
+        <span class="right sheet-actions">
+          <span class="hide-sm">${esc(device.room || 'unassigned')} · ${esc(t.type_id || 'generic')}</span>
+          <button class="iconbtn" data-refresh="${esc(device.id)}"
+                  aria-label="Refresh now" data-tip="Refresh now">${icon('i-refresh')}</button>
+          <button class="iconbtn" data-rename="${esc(device.id)}"
+                  aria-label="Rename device" data-tip="Rename device">${icon('i-edit')}</button>
+        </span>
       </div>
 
       ${device.simulated ? `<div class="alert alert--warn notice">
@@ -241,20 +323,25 @@ function devicePanel(device) {
       ${st.error_code ? `<div class="alert alert--err notice">
         <b>fault</b><span>The unit is reporting error code ${esc(st.error_code)}.</span></div>` : ''}
 
-      <div class="grid grid--2" style="gap:var(--s-4);align-items:start">
-        <div class="stack">
+      <div class="devgrid">
+        <div class="climate">
           ${dial(device)}
-          <div class="flex" style="justify-content:center">
-            <button class="btn ${st.power ? '' : 'btn--ghost'}" data-toggle="power"
-                    ${device.available ? '' : 'disabled'} aria-pressed="${!!st.power}">${icon('i-power')} ${st.power ? 'On' : 'Off'}</button>
-            <button class="btn btn--ghost btn--sm" data-refresh="${esc(device.id)}">
-              ${icon('i-refresh')} Refresh</button>
-            <button class="btn btn--ghost btn--sm" data-rename="${esc(device.id)}">
-              ${icon('i-edit')} Rename</button>
-          </div>
+          <button class="btn powerbtn ${st.power ? '' : 'btn--ghost'}" data-toggle="power"
+                  ${device.available ? '' : 'disabled'} aria-pressed="${!!st.power}">
+            ${icon('i-power', 'ic ic--lg')} ${st.power ? 'On' : 'Off'}</button>
         </div>
-        <div class="stack">
-          ${device.capabilities.filter((c) => c.kind === 'enum').map((c) => segmented(device, c.key)).join('')}
+        <div class="controls">
+          <div class="ctlpair">
+            ${segmented(device, 'mode')}
+            ${segmented(device, 'fan')}
+          </div>
+          <div class="ctlpair">
+            ${segmented(device, 'swing_vertical')}
+            ${segmented(device, 'swing_horizontal')}
+          </div>
+          ${device.capabilities.filter((c) => c.kind === 'enum'
+              && !['mode', 'fan', 'swing_vertical', 'swing_horizontal'].includes(c.key))
+              .map((c) => segmented(device, c.key)).join('')}
           ${toggles(device)}
         </div>
       </div>
