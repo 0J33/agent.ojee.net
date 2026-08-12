@@ -118,6 +118,23 @@ class CommandError(ValueError):
     """Raised for a command the device cannot accept — surfaced to the client as a 400."""
 
 
+class KeyRotated(RuntimeError):
+    """The AC is reachable but the stored localKey no longer decrypts its payloads.
+
+    Haier rotates the key server-side — using the official app is enough to trigger it. This
+    is a distinct condition from "offline": the unit is answering on the LAN and will work
+    again the moment a fresh key is fetched, so the UI must not present it as a dead device
+    or as a fault with the AC itself.
+    """
+
+    def __init__(self, version: int) -> None:
+        self.version = version
+        super().__init__(
+            f"the AC rotated its local key (now version {version}); the stored key no longer "
+            "decrypts. Re-run ./fetch-key.sh and update AC_LOCAL_KEY."
+        )
+
+
 def _as_bool(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -366,10 +383,7 @@ class HaierAC(Driver):
                     f"(lengths {sorted(len(b) for b in raw)}); the key is fine (v{version}) but "
                     "this model's report layout is not mapped"
                 )
-            raise RuntimeError(
-                f"localKey did not decrypt — the AC is on localKey version {version}. "
-                "Keys rotate server-side; re-run ./fetch-key.sh."
-            )
+            raise KeyRotated(version)
         blob = blobs[-1]
         return h.parse_full_status(blob, self.profile), blob
 
@@ -429,6 +443,10 @@ class HaierAC(Driver):
             except Exception as exc:  # noqa: BLE001 - surfaced to the UI, must not kill the loop
                 self._mark_bad("error", f"{type(exc).__name__}: {exc}")
                 return
+        except KeyRotated as exc:
+            self._mark_bad("key_rotated", str(exc))
+            self.localkey_version = exc.version
+            return
         except Exception as exc:  # noqa: BLE001
             self._mark_bad("error", f"{type(exc).__name__}: {exc}")
             return

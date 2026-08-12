@@ -129,12 +129,12 @@ function dial(device) {
     </div>
     <div class="dialbtns">
       <button class="stepbtn" data-step="-1" aria-label="Decrease setpoint"
-              ${!st.power || value <= cap.min ? 'disabled' : ''}>${icon('i-minus', 'ic ic--lg')}</button>
+              ${!device.available || !st.power || value <= cap.min ? 'disabled' : ''}>${icon('i-minus', 'ic ic--lg')}</button>
       <input class="range" type="range" min="${cap.min}" max="${cap.max}" step="${cap.step || 1}"
              value="${value}" data-set="target_temperature" aria-label="Target temperature"
-             ${st.power ? '' : 'disabled'}>
+             ${device.available && st.power ? '' : 'disabled'}>
       <button class="stepbtn" data-step="1" aria-label="Increase setpoint"
-              ${!st.power || value >= cap.max ? 'disabled' : ''}>${icon('i-plus', 'ic ic--lg')}</button>
+              ${!device.available || !st.power || value >= cap.max ? 'disabled' : ''}>${icon('i-plus', 'ic ic--lg')}</button>
     </div>
   </div>`;
 }
@@ -142,7 +142,7 @@ function dial(device) {
 function segmented(device, key) {
   const cap = capOf(device, key);
   if (!cap || cap.kind !== 'enum') return '';
-  const disabled = cap.needs_power && !device.state.power;
+  const disabled = !device.available || (cap.needs_power && !device.state.power);
   return `
   <div class="field">
     <span class="label">${esc(cap.label)}</span>
@@ -166,7 +166,7 @@ function toggles(device) {
     <div class="togglegrid">
       ${caps.map((c) => {
         const on = !!device.state[c.key];
-        const disabled = c.needs_power && !device.state.power;
+        const disabled = !device.available || (c.needs_power && !device.state.power);
         return `<div class="togrow" data-on="${on ? 1 : 0}" data-toggle="${c.key}"
                      role="switch" tabindex="${disabled ? -1 : 0}" aria-checked="${on}"
                      aria-disabled="${disabled}" aria-label="${esc(c.label)}">
@@ -179,7 +179,7 @@ function toggles(device) {
         </div>`;
       }).join('')}
       ${actions.map((c) => `
-        <button class="togrow togrow--action" data-action="${esc(c.key)}"
+        <button class="togrow togrow--action" data-action="${esc(c.key)}" ${device.available ? '' : 'disabled'}"
                 aria-label="${esc(c.label)}">
           ${icon(`i-${c.icon || 'mode'}`)}
           <span class="tlabel">${esc(c.label)}</span>
@@ -190,8 +190,10 @@ function toggles(device) {
 }
 
 function statusBadge(device) {
+  // eslint-disable-next-line no-unused-vars
   const map = {
     ok: ['dot--ok', 'online'],
+    key_rotated: ['dot--warn', 'key rotated'],
     unconfigured: ['dot--warn', 'needs key'],
     unreachable: ['dot--err', 'unreachable'],
     error: ['dot--err', 'error'],
@@ -216,8 +218,24 @@ function devicePanel(device) {
         reach the real unit. Run <code>./fetch-key.sh</code>, set <code>AC_LOCAL_KEY</code>, and
         restart to go live. See SETUP.md.</span></div>` : ''}
 
-      ${device.status !== 'ok' ? `<div class="alert alert--err notice">
+      ${device.status === 'key_rotated' ? `<div class="alert alert--warn notice">
+        <b>key rotated</b><span>The AC is online and reachable — it just changed its
+        encryption key (now version ${esc((device.transport || {}).localkey_version ?? '?')}), so
+        the hub can no longer read or command it. Haier rotates this server-side; using the
+        official app is enough to trigger it. Run <code>./fetch-key.sh ${esc((device.transport || {}).device_id || '')}</code>,
+        put the new value in <code>AC_LOCAL_KEY</code> and restart. Nothing is wrong with the
+        unit and no settings are lost.</span>
+      </div>` : ''}
+
+      ${(device.status !== 'ok' && device.status !== 'key_rotated') ? `<div class="alert alert--err notice">
         <b>${esc(device.status)}</b><span>${esc(device.status_detail || device.last_error || '')}</span>
+      </div>` : ''}
+
+      ${device.stale ? `<div class="alert notice">
+        <b>not live</b><span>${device.last_seen
+          ? `The readings below are the last successful ones, from ${new Date(device.last_seen * 1000).toLocaleString('en-GB', { hour12: false })}.`
+          : 'There has been no successful read since the hub started, so the readings below are placeholders, not the unit\'s actual settings.'
+        } Controls stay disabled until the hub can talk to the unit again.</span>
       </div>` : ''}
 
       ${st.error_code ? `<div class="alert alert--err notice">
@@ -228,7 +246,7 @@ function devicePanel(device) {
           ${dial(device)}
           <div class="flex" style="justify-content:center">
             <button class="btn ${st.power ? '' : 'btn--ghost'}" data-toggle="power"
-                    aria-pressed="${!!st.power}">${icon('i-power')} ${st.power ? 'On' : 'Off'}</button>
+                    ${device.available ? '' : 'disabled'} aria-pressed="${!!st.power}">${icon('i-power')} ${st.power ? 'On' : 'Off'}</button>
             <button class="btn btn--ghost btn--sm" data-refresh="${esc(device.id)}">
               ${icon('i-refresh')} Refresh</button>
             <button class="btn btn--ghost btn--sm" data-rename="${esc(device.id)}">

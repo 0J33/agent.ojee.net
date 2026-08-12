@@ -71,6 +71,11 @@ class Driver:
             "status": self.status,
             "status_detail": self.status_detail,
             "last_seen": self.last_seen,
+            # The readings below are never live while the device is unavailable: either the
+            # last good ones, or — if there has not been a good read since start — the
+            # driver's init defaults. Both must be flagged, or the UI shows an invented
+            # setpoint as though it came off the unit.
+            "stale": not self.available,
             "last_error": self.last_error,
             "state": self.state,
             "capabilities": [
