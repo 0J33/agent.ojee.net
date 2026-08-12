@@ -187,6 +187,12 @@ function vaneGlyph(axis, token, label) {
       `<path class="sweep" d="${arc}"/></svg>`;
   }
 
+  // Horizontal is not an even fan — 1 and 2 both sit centre and only 3-6 are real positions,
+  // running far-left to far-right. Confirmed on the hardware, so it is a lookup, not maths.
+  if (axis === 'h') {
+    const bearing = { p3: 45, p4: 22, p1: 0, p2: 0, p5: -22, p6: -45 }[token] ?? 0;
+    return `${open}${unit}<g transform="rotate(${bearing} ${pivot})"><path d="${arrow}"/></g></svg>`;
+  }
   const index = Number(token.slice(1));
   const total = axis === 'v' ? 5 : 6;
   const span = axis === 'v' ? 76 : 90;
@@ -221,13 +227,11 @@ const GLYPHS = {
 const GLYPH_TITLES = {
   swing_vertical: { fixed: 'Fixed — louvre parked, no sweep', auto: 'Auto — sweeps the full range',
     p1: 'Angle 1 — highest', p2: 'Angle 2', p3: 'Angle 3 — straight out', p4: 'Angle 4', p5: 'Angle 5 — lowest' },
-  // The protocol documents these only as "position one .. position eight" — it says nothing
-  // about which way the vane physically points. The order is real; the left/right reading is
-  // this UI's convention (1 = one end of the travel, 6 = the other). Flip `direction` above if
-  // the hardware turns out to run the other way.
+  // Confirmed by watching the vane: codes 1 and 2 are both centre, and 3-6 run far-left to
+  // far-right. Shown in physical order, with 2 dropped as a duplicate of 1.
   swing_horizontal: { fixed: 'Fixed — vane parked, no sweep', auto: 'Auto — sweeps the full range',
-    p1: 'Angle 1 — one end of the sweep', p2: 'Angle 2', p3: 'Angle 3', p4: 'Angle 4',
-    p5: 'Angle 5', p6: 'Angle 6 — the other end' },
+    p3: 'Far left', p4: 'Left', p1: 'Centre — straight out', p2: 'Centre — straight out',
+    p5: 'Right', p6: 'Far right' },
   eco: { off: 'Eco off — full power', level1: 'Eco 1 — light power cap',
     level2: 'Eco 2 — medium power cap', level3: 'Eco 3 — hardest cap, slowest cooling' },
 };

@@ -57,9 +57,23 @@ SWING_V_CODES = {"fixed": 0x00, "p1": 0x02, "p2": 0x04, "p3": 0x06,
 SWING_H_CODES = {"fixed": 0, "p1": 1, "p2": 2, "p3": 3,
                  "p4": 4, "p5": 5, "p6": 6, "auto": 7}
 SWING_V_ORDER = ["fixed", "p1", "p2", "p3", "p4", "p5", "auto"]
-SWING_H_ORDER = ["fixed", "p1", "p2", "p3", "p4", "p5", "p6", "auto"]
-SWING_LABELS = {"fixed": "Fix", "auto": "Auto", "p1": "1", "p2": "2", "p3": "3",
-                "p4": "4", "p5": "5", "p6": "6"}
+
+# The horizontal codes are NOT an evenly-spaced fan, which is why any linear guess came out
+# wrong. Confirmed against the hardware by watching the vane: codes 1 and 2 both park it in
+# the centre, and only 3-6 are real positions, running far-left -> far-right.
+#   1, 2 -> centre (duplicates)   3 -> far left   4 -> left   5 -> right   6 -> far right
+# The UI therefore presents them in PHYSICAL order and drops 2 as a duplicate of 1; both codes
+# stay valid on input so a unit reporting either still resolves.
+SWING_H_ORDER = ["fixed", "p3", "p4", "p1", "p5", "p6", "auto"]
+#: horizontal code -> where the vane actually points, as an angle for the UI to draw
+SWING_H_BEARING = {"p3": "far_left", "p4": "left", "p1": "centre", "p2": "centre",
+                   "p5": "right", "p6": "far_right"}
+SWING_LABELS = {"fixed": "Fix", "auto": "Auto",
+                "p1": "Mid", "p2": "Mid",
+                "p3": "\u00ab", "p4": "\u2039", "p5": "\u203a", "p6": "\u00bb"}
+#: vertical keeps its plain numbering — it is a real ordered fan
+SWING_V_LABELS = {"fixed": "Fix", "auto": "Auto", "p1": "1", "p2": "2", "p3": "3",
+                  "p4": "4", "p5": "5"}
 _V_FROM_CODE = {v: k for k, v in SWING_V_CODES.items()}
 _H_FROM_CODE = {v: k for k, v in SWING_H_CODES.items()}
 
@@ -210,7 +224,7 @@ def build_capabilities(spec: Spec) -> list[Capability]:
         ),
         Capability(
             "swing_vertical", "Swing Vert", "enum",
-            options=[{"value": t, "label": SWING_LABELS[t]} for t in SWING_V_ORDER],
+            options=[{"value": t, "label": SWING_V_LABELS[t]} for t in SWING_V_ORDER],
             needs_power=True, icon="swing-v",
             hint="Fix parks the louvre where it is; 1-5 are fixed stops top to bottom; "
                  "Auto sweeps. All confirmed on this unit.",
@@ -414,7 +428,9 @@ class HaierAC(Driver):
         if blob is not None:
             vertical, horizontal = vane_codes_from_blob(blob)
             self.state["swing_vertical"] = _V_FROM_CODE.get(vertical, "fixed")
-            self.state["swing_horizontal"] = _H_FROM_CODE.get(horizontal, "fixed")
+            token = _H_FROM_CODE.get(horizontal, "fixed")
+            # 1 and 2 both park the vane centre; the UI shows one button, so fold 2 onto 1.
+            self.state["swing_horizontal"] = "p1" if token == "p2" else token
 
         # The unit tells us whether it can heat; regenerate the control surface from that so
         # the UI never offers a mode this hardware would refuse.
