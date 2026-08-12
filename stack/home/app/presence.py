@@ -42,6 +42,10 @@ def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 class Presence:
     """Where the phone is, and which zone that means."""
 
+    #: How many recent reports to keep for diagnosis. Small — this is for answering "is the
+    #: geofence actually firing?", not for building a location history.
+    RECENT_LIMIT = 25
+
     def __init__(self, store) -> None:
         self.store = store
         self.last_fix: dict[str, Any] | None = self.store.get("last_fix")
@@ -85,10 +89,32 @@ class Presence:
         return candidates[0][1] if candidates else None
 
     # ---- ingest --------------------------------------------------------
+    def _note(self, payload: dict[str, Any]) -> None:
+        """Keep a short trail of what the phone actually sent.
+
+        Without this there is no way to tell a region crossing from an ordinary periodic fix,
+        and therefore no way to answer whether the phone's geofence is set up at all — the
+        difference matters, because only the geofence fires the instant you cross.
+        """
+        recent = self.store.get("recent_reports") or []
+        recent.insert(0, {
+            "ts": time.time(),
+            "type": payload.get("_type"),
+            "trigger": payload.get("t"),          # "c" = circular region crossing
+            "event": payload.get("event"),        # enter / leave, on a transition
+            "region": payload.get("desc"),
+            "acc": payload.get("acc"),
+        })
+        self.store.set("recent_reports", recent[: self.RECENT_LIMIT])
+
+    def recent(self) -> list[dict[str, Any]]:
+        return self.store.get("recent_reports") or []
+
     def ingest(self, payload: dict[str, Any]) -> tuple[str | None, str | None]:
         """Take one OwnTracks report. Returns (previous, current) when presence changed."""
         kind = payload.get("_type")
         now = time.time()
+        self._note(payload)
 
         if kind == "location":
             lat, lon = payload.get("lat"), payload.get("lon")

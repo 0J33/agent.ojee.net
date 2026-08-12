@@ -257,6 +257,7 @@ body { display: flex; flex-direction: column; min-height: 100dvh; }
 .ecobar ~ .vent, svg .vent { opacity: 0.4; }
 .vane path { stroke-linecap: butt; stroke-linejoin: miter; }
 .ecobar { fill: none; stroke: currentColor; stroke-width: 1.5; }
+.ecoslash { stroke: currentColor; stroke-width: 1.75; opacity: 1; }
 .ecobar.on { fill: currentColor; }
 .segctl--glyph button[aria-pressed="true"] .ecobar.on { fill: var(--accent); stroke: var(--accent); }
 

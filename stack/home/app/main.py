@@ -193,6 +193,13 @@ async def get_presence() -> Any:
     return HUB.presence.describe()
 
 
+@app.get("/api/location/recent")
+async def recent_location_reports() -> Any:
+    """What the phone has actually been sending — type, trigger and region. Use this to check
+    whether the geofence is configured: a crossing shows type=transition (or trigger "c")."""
+    return HUB.presence.recent()
+
+
 @app.get("/api/zones")
 async def get_zones() -> Any:
     return HUB.presence.zones()

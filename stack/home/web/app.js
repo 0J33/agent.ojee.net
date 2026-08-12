@@ -211,8 +211,11 @@ function ecoGlyph(token, label) {
   const bars = [0, 1, 2].map((i) =>
     `<rect x="${6 + i * 7}" y="${20 - i * 5}" width="4" height="${5 + i * 5}"
        class="ecobar${i < level ? ' on' : ''}"/>`).join('');
+  // The "off" slash used to run bottom-left to top-right — the same direction the bars climb,
+  // so it read as part of them and all but vanished. It now cuts ACROSS that slope, and is not
+  // dimmed: it is the whole signal for this option, not a reference mark.
   return `<svg class="ic" viewBox="0 0 28 28" role="img" aria-label="${esc(label)}">
-    ${bars}${level === 0 ? '<path class="vent" d="M5 23L24 5"/>' : ''}</svg>`;
+    ${bars}${level === 0 ? '<path class="ecoslash" d="M5 5L24 24"/>' : ''}</svg>`;
 }
 
 const GLYPHS = {
