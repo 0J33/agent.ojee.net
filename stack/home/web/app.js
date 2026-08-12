@@ -148,36 +148,50 @@ function dial(device) {
    accessible name is unusable with a screen reader.
    ============================================================ */
 
-/** The louvre blade at the angle this position parks it, over a fixed vent reference.
-    Blade + vent, no arrowhead: at 26px an arrowhead adds pixels without adding signal, and
-    the tilt of a plain bar against a fixed one is what actually reads at a glance. */
+/** Where the air actually goes.
+ *
+ *  A tilted bar carries no direction, and drawn for both axes it produced two icon sets that
+ *  looked identical. These are two different VIEWS instead:
+ *    vertical   — side view: the unit is a solid block on the left, air leaves rightward,
+ *                 the arrow tilts up (angle 1) to down (angle 5)
+ *    horizontal — plan view: the unit sits along the top, air leaves downward, the arrow
+ *                 fans left (angle 1) to right (angle 6)
+ *  So the two axes fan along different screen axes and cannot be confused.
+ *
+ *  Fixed and Auto share the position arrow rather than inventing a third language: Fixed runs
+ *  into a stop bar, Auto draws both extremes joined by the sweep arc.
+ */
 function vaneGlyph(axis, token, label) {
-  const open = `<svg class="ic vane" viewBox="0 0 28 28" role="img" aria-label="${esc(label)}">`;
-  const vent = axis === 'v'
-    ? '<path class="vent" d="M5 5h18"/>'
-    : '<path class="vent" d="M5 5v18"/>';
+  const open = `<svg class="ic vane" viewBox="0 0 32 32" role="img" aria-label="${esc(label)}">`;
+  const unit = axis === 'v'
+    ? '<rect class="unit" x="3" y="6" width="4" height="20"/>'
+    : '<rect class="unit" x="6" y="3" width="20" height="4"/>';
+  const pivot = axis === 'v' ? '9 16' : '16 9';
+  const arrow = axis === 'v'
+    ? 'M9 16h17M22.5 12L26 16l-3.5 4'
+    : 'M16 9v17M12 22.5L16 26l4-3.5';
 
   if (token === 'fixed') {
-    const blade = axis === 'v' ? 'M8 15h12' : 'M15 8v12';
-    const stop = axis === 'v' ? 'M11 21h6' : 'M21 11v6';
-    return `${open}${vent}<path d="${blade}"/><path class="vent" d="${stop}"/></svg>`;
+    const shaft = axis === 'v'
+      ? 'M9 16h13M18.5 12.5L22 16l-3.5 3.5'
+      : 'M16 9v13M12.5 18.5L16 22l3.5-3.5';
+    const stop = axis === 'v' ? 'M25 10v12' : 'M10 25h12';
+    return `${open}${unit}<path d="${shaft}"/><path d="${stop}"/></svg>`;
   }
   if (token === 'auto') {
-    // the whole range at once: three blades fanned
-    const fan = axis === 'v'
-      ? ['rotate(-38 14 11)', 'rotate(0 14 11)', 'rotate(38 14 11)'].map(
-          (r) => `<path d="M8 15h12" transform="${r}"/>`).join('')
-      : ['rotate(-38 11 14)', 'rotate(0 11 14)', 'rotate(38 11 14)'].map(
-          (r) => `<path d="M15 8v12" transform="${r}"/>`).join('');
-    return `${open}${vent}${fan}</svg>`;
+    const ext = axis === 'v' ? 38 : 45;
+    const arc = axis === 'v' ? 'M22 8.5A15 15 0 0 1 22 23.5' : 'M8.5 22A15 15 0 0 0 23.5 22';
+    return `${open}${unit}` +
+      `<g transform="rotate(${-ext} ${pivot})"><path d="${arrow}"/></g>` +
+      `<g transform="rotate(${ext} ${pivot})"><path d="${arrow}"/></g>` +
+      `<path class="sweep" d="${arc}"/></svg>`;
   }
 
   const index = Number(token.slice(1));
   const total = axis === 'v' ? 5 : 6;
-  const angle = -52 + (104 * (index - 1)) / (total - 1);
-  const blade = axis === 'v' ? 'M8 15h12' : 'M15 8v12';
-  const pivot = axis === 'v' ? '14 11' : '11 14';
-  return `${open}${vent}<path d="${blade}" transform="rotate(${angle.toFixed(1)} ${pivot})"/></svg>`;
+  const span = axis === 'v' ? 76 : 90;
+  const angle = -(span / 2) + (span * (index - 1)) / (total - 1);
+  return `${open}${unit}<g transform="rotate(${angle.toFixed(1)} ${pivot})"><path d="${arrow}"/></g></svg>`;
 }
 
 /** Eco as what it is: a power cap. Taller bars = harder limit = slower cooling. */
@@ -285,9 +299,10 @@ function devicePanel(device) {
   <div class="sheet" data-device="${esc(device.id)}">
     <div class="sheet-inner">
       <div class="sheet-header">
-        <span>dwg <b>${esc(device.id)}</b> · <em>${esc(device.name)}</em></span>
+        <span>unit <b>${esc(t.type_id || device.kind)}</b>${
+          t.device_id ? ` · <em>${esc(t.device_id)}</em>` : ''}</span>
         <span class="right sheet-actions">
-          <span class="hide-sm">${esc(device.room || 'unassigned')} · ${esc(t.type_id || 'generic')}</span>
+          <span class="hide-sm">${esc(device.room || 'unassigned')}</span>
           <button class="iconbtn" data-refresh="${esc(device.id)}"
                   aria-label="Refresh now" data-tip="Refresh now">${icon('i-refresh')}</button>
           <button class="iconbtn" data-rename="${esc(device.id)}"

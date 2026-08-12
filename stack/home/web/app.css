@@ -250,10 +250,12 @@ body { display: flex; flex-direction: column; min-height: 100dvh; }
   font-size: 0.52rem; font-weight: 900; letter-spacing: 1px;
   text-transform: uppercase; line-height: 1;
 }
-/* the vent lip and the "off" slash are reference marks, not signal — hold them back so the
-   blade angle reads first */
-.vane .vent, .ecobar ~ .vent, svg .vent { opacity: 0.4; }
-.vane path { stroke-linecap: butt; }
+/* the appliance block is the fixed reference the arrow is read against */
+.vane .unit { fill: currentColor; stroke: none; opacity: 0.85; }
+/* the sweep arc is the path, not the airflow — hold it back behind the two extreme arrows */
+.vane .sweep { opacity: 0.5; }
+.ecobar ~ .vent, svg .vent { opacity: 0.4; }
+.vane path { stroke-linecap: butt; stroke-linejoin: miter; }
 .ecobar { fill: none; stroke: currentColor; stroke-width: 1.5; }
 .ecobar.on { fill: currentColor; }
 .segctl--glyph button[aria-pressed="true"] .ecobar.on { fill: var(--accent); stroke: var(--accent); }
