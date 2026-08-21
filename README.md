@@ -1,156 +1,117 @@
-# Agent Stack
+# ojee-home
 
-A self-hosted AI agent + automation stack: a custom dashboard that talks to a local **Ollama**, the full-featured **Open WebUI** chat, **n8n** for workflow automation, and an optional **CouchDB** for syncing an Obsidian vault. Everything runs in Docker behind **Caddy** with auto-renewing TLS.
+Local device control and home automation. Speaks the device's LAN protocol **directly** — no
+cloud, no vendor app, no account round-trip to turn on the air conditioning.
 
-Designed to live behind **Tailscale** (no public ports) but works fine on a regular VPS too — it's a matter of which IP you bind Caddy to.
+Runs standalone or as an [ojee-console](https://github.com/0J33/ojee-console) module.
 
-## What you get
-
-| Surface | What it is |
-|---|---|
-| `https://<DASHBOARD_DOMAIN>/` | Custom dashboard — live stats, container controls, a chat with full tool access (web search, file reads, n8n workflow CRUD, server stats) |
-| `https://<OPENWEBUI_DOMAIN>/` | Open WebUI — full chat UI with RAG, history, model management |
-| `https://<N8N_DOMAIN>/` | n8n — visual workflow automation |
-| `https://<COUCHDB_DOMAIN>/` | CouchDB — backend for the [Obsidian Self-hosted LiveSync plugin](https://github.com/vrtmrz/obsidian-livesync) |
-
-The dashboard's chat is the highlight: it has a system prompt that knows how to build n8n workflows, call free no-auth APIs (weather, time, currency, news, etc.), read files off the host, and pull live stats — all without leaving the chat box.
+> Formerly `agent.ojee.net`. That repo held both this hub and an agent dashboard; the dashboard
+> now lives in [ojee-agent](https://github.com/0J33/ojee-agent) and the git history stayed here,
+> with the protocol work.
 
 ---
 
-## Requirements
+## What it is
 
-- A Linux host with Docker + Docker Compose
-- An Ollama install on the host (`curl -fsSL https://ollama.com/install.sh | sh`) reachable at `host.docker.internal:11434`
-- A domain you control on Cloudflare (for DNS-01 TLS)
-- *Optional:* an NVIDIA GPU (the dashboard container uses `runtime: nvidia` for GPU-accelerated tool calls if available — comment those lines out if you don't have one)
+A small FastAPI hub that owns devices, scenes and automations, and pushes live state over SSE.
+
+The reference driver is a **Haier air conditioner**, driven over its LAN protocol on tcp/56800
+with AES-encrypted payloads. That is the interesting part: no cloud dependency at runtime, and
+the hub heals itself when the vendor rotates the device key server-side.
+
+**The UI is generic over capabilities.** A driver declares what it supports — `switch`, `enum`,
+`range`, `readout` — and the frontend renders controls from that list. Adding a device means
+writing a `Driver` subclass and registering it; no frontend change at all. That property is the
+reason this is worth keeping, and it survived the module port intact.
 
 ---
 
-## Setup
+## Run it
 
 ```bash
-git clone https://github.com/0J33/agent.ojee.net.git ~/stack
-cd ~/stack/stack
-cp .env.example .env
-vim .env            # fill in domains, ACME email, Cloudflare token, etc.
+pip install -r requirements.txt
+PYTHONPATH=.:vendor HUB_DEMO=1 uvicorn app.main:app --port 8110
 ```
 
-Then point your DNS at the host. Four `A`/`AAAA` (or `CNAME`) records — whatever you put in `*_DOMAIN`:
+`HUB_DEMO=1` runs a simulated device, so the whole UI, scenes and automations are usable with no
+hardware. **Without a key it simulates rather than failing** — the top strip reads `SIMULATED`
+and the device's Link field says so. Setting the key is the only change needed to go live.
 
-```
-agent.example.com        → <BIND_IP>
-chat.agent.example.com   → <BIND_IP>
-flow.agent.example.com   → <BIND_IP>
-sync.agent.example.com   → <BIND_IP>   (skip if you don't run CouchDB)
-```
-
-Bring it up:
+Docker:
 
 ```bash
-docker compose up -d --build
+docker build -t ojee-home . && docker run -p 8110:8110 -v home_data:/data ojee-home
 ```
 
-First boot pulls images and runs the Caddy DNS-01 dance with Cloudflare — takes a minute. Watch with `docker compose logs -f caddy`. When the dashboard responds at `https://<DASHBOARD_DOMAIN>/`, set up first-run accounts:
+| Variable | Default | Meaning |
+|---|---|---|
+| `HUB_DEMO` | `0` | `1` forces the simulator even with a key set |
+| `HUB_POLL_SECONDS` | `45` | see below — this number is not arbitrary |
+| `AC_HOST` / `AC_DEVICE_ID` / `AC_LOCAL_KEY` | — | the unit; blank key ⇒ simulator |
+| `AC_TEMP_MIN` / `AC_TEMP_MAX` | — | narrow the setpoint range to what the remote allows |
+| `HAIER_USERNAME` / `HAIER_PASSWORD` / `HAIER_REGION` | — | used *only* to re-fetch a rotated key |
+| `HOME_LOCATION_TOKEN` | — | shared secret for phone location posts |
 
-| Service | First-run |
-|---|---|
-| Dashboard | Logs you in with `DASHBOARD_PASSWORD` from `.env` |
-| Open WebUI | First signup becomes admin |
-| n8n | First signup becomes owner |
-
-CouchDB needs a one-time init for Obsidian's CORS/body-size requirements:
-
-```bash
-./couchdb/init.sh obsidian
-```
+Full device setup, the Wi-Fi bridging, key fetching and what this specific unit actually
+supports: **[docs/haier-ac.md](docs/haier-ac.md)**.
 
 ---
 
-## `.env` reference (full list in `.env.example`)
+## Why polling, and why 45 seconds
 
-| Var | What |
-|---|---|
-| `BIND_IP` | IP Caddy listens on. Use your Tailscale IP for tailnet-only access, `0.0.0.0` for public, `127.0.0.1` for loopback. |
-| `ACME_EMAIL` | Email Let's Encrypt registers your certs under. |
-| `CLOUDFLARE_API_TOKEN` | Scoped to *Edit zone DNS* on your domain — needed because the stack uses DNS-01 (so it works even when port 80 isn't publicly reachable). |
-| `DASHBOARD_DOMAIN` / `OPENWEBUI_DOMAIN` / `N8N_DOMAIN` / `COUCHDB_DOMAIN` | Subdomains for each service. Used by Caddy and by the dashboard's quick-links. |
-| `DASHBOARD_BASE_URL` | Public URL the dashboard uses to reference itself in chat answers. Usually `https://$DASHBOARD_DOMAIN`. |
-| `HOST_STACK_PATH` | Absolute host path to this `stack/` directory — mounted into the dashboard at `/host-stack` so the chat can read your `docker-compose.yml`. |
-| `TIMEZONE` | IANA name. Picked up by n8n's scheduler and by the chat agent when interpreting "every day at 9am". |
-| `DASHBOARD_PASSWORD` | Login. Wrap in single quotes if it contains `#`, `$`, or spaces. |
-| `JWT_SECRET` | Signs the dashboard's session tokens. Rotate to invalidate sessions. |
-| `N8N_API_KEY` | From n8n → Settings → n8n API. Lets the dashboard chat create/run/edit workflows. |
-| `LOQ_*` | Optional second Ollama on another machine + a small control HTTP API to start/stop it. Surfaced as the "Loq" tab. |
-| `CODE_AGENT_*` | Optional Claude Code integration. Surfaced as the "Code" tab. |
-| `COUCHDB_USER` / `COUCHDB_PASSWORD` | Obsidian LiveSync auth. |
+The AC accepts **one local session at a time** and caps each at about 17 seconds. So the hub
+opens a session, reads, and closes — it cannot hold a socket open. Polling much faster means
+fighting the phone app for the socket. After a write it polls every 2s for a few seconds to
+confirm the change landed, then drops back.
 
----
+## Key rotation heals itself
 
-## Talking to Ollama directly
+The vendor rotates the device key server-side and does not document when. Observed here: a
+scheduled auto-off through the official app moved it from key version 3 to 4. So the hub does not
+try to predict it — it *reacts*. Any read or command that fails to decrypt triggers a cloud
+re-fetch and one retry, so a rotation heals inside a single poll.
 
-```bash
-curl -s http://<BIND_IP>:11434/api/generate \
-  -d '{"model":"qwen2.5-coder:7b","prompt":"Explain X","stream":false}'
-```
-
-Both the dashboard and Open WebUI use this API under the hood.
+Fetches are rate-limited to one per five minutes and stop after three consecutive failures, so a
+wrong password cannot turn the poll loop into a login-attempt flood. The account password is read
+only from the environment; it is never written to the data file and never leaves the machine
+except to the vendor's own login endpoint.
 
 ---
 
-## Architecture
+## Presence
 
-```
-                  ┌────────────┐
-client ───TLS───► │   Caddy    │  (DNS-01 cert from Let's Encrypt)
-                  └─────┬──────┘
-        ┌───────────────┼─────────────────┬──────────────┐
-        ▼               ▼                 ▼              ▼
-   dashboard:8080  openwebui:8080     n8n:5678      couchdb:5984
-        │               │                 │
-        └─────► Ollama on host (host.docker.internal:11434)
-```
+The phone reports its own position to the hub — no Apple Shortcuts, no third-party cloud. Point
+OwnTracks at `/api/location?token=…` and automations gain an "I arrive / I leave" trigger.
 
-The dashboard has `docker.sock` mounted so it can act on containers and read host files. **That makes it effectively root for the actions whitelisted in `server.js`** — anyone with the dashboard password can restart the stack. Use a strong password and don't expose the dashboard publicly without thinking about it.
+A fix worse than 500 m accuracy is ignored rather than allowed to flip presence, and a fix older
+than an hour is reported as stale rather than as current. Presence changes run their automations
+immediately rather than waiting for the next poll, so arriving home does not take 45 seconds.
 
 ---
 
-## Updating
+## API
 
-```bash
-cd ~/stack
-git pull
-docker compose pull
-docker compose up -d --build
-```
-
-The dashboard frontend is plain HTML/JS in `dashboard/public/` and the backend is `dashboard/server.js` (Express) — `--build` picks them up.
-
----
-
-## Common knobs
-
-**Change the dashboard password.** Edit `.env`, then `docker compose up -d dashboard`.
-
-**Bind Caddy to a different IP.** Edit `BIND_IP` in `.env` and `docker compose up -d caddy`.
-
-**Disable a service** (e.g. you don't use Obsidian). Comment out its `service:` block in `docker-compose.yml` *and* its `{...}` site block in `caddy/Caddyfile`.
-
-**Pull a new Ollama model.** `ollama pull <name>` on the host — it shows up in the dashboard + Open WebUI automatically.
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/module.json` | module manifest (what lets a console mount this) |
+| `GET` | `/api/state` | full snapshot: devices, scenes, automations, activity |
+| `GET` | `/api/events` | SSE stream of live changes |
+| `POST` | `/api/devices/{id}/command` | `{"power":true,"target_temperature":22}` |
+| `GET`/`PUT` | `/api/scenes`, `/api/automations` | read / replace |
+| `POST` | `/api/scenes/{id}/activate` | run a scene |
+| `GET` | `/api/health` | liveness + device counts |
 
 ---
 
-## Troubleshooting
+## Adding a device
 
-| Symptom | Check |
-|---|---|
-| Cert warning in browser | `docker compose logs caddy`. Cloudflare token wrong? Token not scoped to the right zone? |
-| `502 Bad Gateway` on a subdomain | The upstream container isn't healthy. `docker compose ps`, then `docker compose logs <service>`. |
-| Dashboard chat says "no model" | `ollama list` on the host — pull at least one model. |
-| n8n workflow URLs in chat point to the wrong domain | Check `N8N_DOMAIN` and `DASHBOARD_BASE_URL` in `.env`. |
-| CouchDB returns "unauthorized" from Obsidian | The plugin's username/password must match `.env`. |
+Write a `Driver` subclass in `app/drivers/`, declare its `capabilities()`, register it in
+`hub.py`. The REST API and the entire frontend are generic over the capability list, so it
+appears in the UI with no frontend change.
 
 ---
 
-## License
+## Licence
 
-MIT.
+MIT. The LAN protocol implementation is [`haismart-hrdp`](https://github.com/enapt/haismart-local)
+by [@enapt](https://github.com/enapt), vendored under `vendor/`, MIT licensed.
