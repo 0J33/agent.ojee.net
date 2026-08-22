@@ -27,9 +27,13 @@ class ACConfig:
     id: str = "ac-living"
     name: str = _env("AC_NAME", "Living Room AC")
     room: str = _env("AC_ROOM", "Living Room")
-    host: str = _env("AC_HOST", "192.168.1.36")
+    # Blank by default. A real address only matters once AC_LOCAL_KEY is set,
+    # and until then the hub substitutes the simulator anyway (hub.py) — so
+    # shipping one author's LAN address and Wi-Fi MAC as the defaults bought
+    # nothing and put a real device's identifiers in a public repo.
+    host: str = _env("AC_HOST", "")
     # Wi-Fi module MAC, no separators. Also used to re-find the unit when DHCP moves it.
-    device_id: str = _env("AC_DEVICE_ID", "94224C108338")
+    device_id: str = _env("AC_DEVICE_ID", "")
     # Per-device 32-hex localKey. Empty -> the driver reports "unconfigured" instead of failing,
     # and the hub falls back to a simulated device so the UI stays fully usable.
     local_key: str = _env("AC_LOCAL_KEY", "")

@@ -1,0 +1,57 @@
+# ojee-home, standalone.
+#
+#   cp .env.example .env      # then edit it — the defaults run a simulator
+#   docker compose up -d
+#   open http://localhost:8110
+#
+# This runs the hub on its OWN, with its built-in shell. Mounted into
+# ojee-console it is the same image and the same container; the console just
+# proxies to it and the built-in shell goes unused. Nothing here changes
+# between the two modes, which is the point of the module contract.
+
+services:
+  home:
+    build: .
+    image: ojee-home:latest
+    container_name: ojee-home
+    restart: unless-stopped
+
+    # host networking is not optional for real hardware. The Haier LAN
+    # protocol discovers and talks to the unit by broadcasting on the local
+    # subnet, and a bridged container cannot see those broadcasts — the AC
+    # simply never answers. With HUB_DEMO=1 (or no localKey) the simulator
+    # runs fine on a normal bridge, so the override below is there for anyone
+    # who only wants to look at the UI.
+    network_mode: host
+
+    env_file:
+      # Optional on purpose: `docker compose up` works on a fresh clone with
+      # no .env at all and runs the simulator. Requiring it would make the
+      # first command anyone types fail.
+      - path: .env
+        required: false
+
+    environment:
+      HUB_BIND: ${HUB_BIND:-0.0.0.0}
+      HUB_PORT: ${HUB_PORT:-8110}
+      HUB_DATA_DIR: /data
+      TZ: ${TIMEZONE:-UTC}
+
+    volumes:
+      # Zones, automations, scenes, activity and any re-fetched localKey. This
+      # is the only state the hub has; back this up and nothing else.
+      - home-data:/data
+
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys,os; sys.exit(0 if urllib.request.urlopen(f'http://127.0.0.1:{os.environ.get(\"HUB_PORT\",\"8110\")}/api/health', timeout=4).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+volumes:
+  home-data:

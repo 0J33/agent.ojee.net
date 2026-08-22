@@ -1,0 +1,18 @@
+# Overlay for running WITHOUT host networking — simulator only.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.bridge.yml up -d
+#
+# Use this to try the UI on a machine where you do not want a container on the
+# host network, or where host networking is unavailable (Docker Desktop on
+# macOS and Windows). A real Haier unit will NOT be reachable this way: the
+# protocol needs subnet broadcasts that a bridge network does not carry.
+
+services:
+  home:
+    network_mode: bridge
+    ports:
+      - "${HUB_PORT:-8110}:8110"
+    environment:
+      HUB_DEMO: "1"
+      HUB_BIND: 0.0.0.0
+      HUB_PORT: "8110"

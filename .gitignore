@@ -1,1 +1,6 @@
 .claude/
+__pycache__/
+*.pyc
+
+# Holds the localKey and the Haier account password. Never commit it.
+.env

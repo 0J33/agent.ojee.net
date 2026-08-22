@@ -2,7 +2,7 @@
 
 Local device control and automation for the house. Runs on `ojee-hp-zorin`, served by the
 stack's Caddy at `https://home.ojee.net` (tailnet only — the A record points at the
-Tailscale IP `100.117.98.52`, which is not routable from the public internet).
+Tailscale IP (a `100.x` address), which is not routable from the public internet).
 
 ## How it reaches the AC
 
