@@ -43,24 +43,16 @@ html {
   color-scheme: dark;
 }
 body { overscroll-behavior: none; }
-body { display: flex; flex-direction: column; min-height: 100dvh; }
-.wrap { flex: 1 0 auto; }
-.statusbar { flex: none; }
 
-/* Both bars stick, so the nav has to start below the hudbar rather than at 0 — otherwise
-   they occupy the same 30px and the nav renders on top of the status strip. */
-.hudbar { position: sticky; top: 0; z-index: 60; flex: none; }
-.nav { position: sticky; top: 30px; z-index: 50; flex: none; }
-
-.wrap {
-  width: 100%;
-  max-width: 1180px;
-  margin: 0 auto;
-  /* Modest bottom padding here — the big clearance is only needed under the mobile tab bar
-     (set in the breakpoint below). Carrying 120px on desktop made short pages scroll ~90px
-     for no reason. */
-  padding: var(--s-4) var(--s-4) var(--s-5);
-}
+/* The shell owns its own chrome — body layout, .wrap, .hudbar, .nav,
+   .tabbar and .statusbar all live in ojee-ui.css, in both mounted and
+   standalone mode. This file used to restate them, left over from when this
+   was a standalone app with a hand-rolled shell, and the copies then drifted:
+   the duplicate `.nav { top: 30px }` and `.wrap { padding-bottom: 110px }`
+   loaded AFTER ojee-ui.css and silently beat its safe-area-aware versions,
+   which is what put the hudbar under the phone's status bar and left ~50px of
+   dead space above the tab bar. A module styling the shell is exactly what
+   the module contract exists to prevent. */
 
 .section-head {
   display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
@@ -71,33 +63,6 @@ body { display: flex; flex-direction: column; min-height: 100dvh; }
 .section-head .spacer { flex: 1; }
 
 .stack-lg { display: flex; flex-direction: column; gap: var(--s-4); }
-
-/* ---------- bottom tab bar (mobile only) ---------- */
-.tabbar { display: none; }
-@media (max-width: 860px) {
-  .nav-links { display: none; }
-  .tabbar {
-    position: fixed; left: 0; right: 0; bottom: 0; z-index: 80;
-    display: grid; grid-template-columns: repeat(5, 1fr);
-    background: rgba(8, 8, 14, 0.96);
-    border-top: 1px solid var(--line);
-    backdrop-filter: blur(8px);
-    padding-bottom: env(safe-area-inset-bottom);
-  }
-  .tabbar .tabitem {
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 5px; min-height: 56px; padding: 8px 4px;
-    background: none; border: 0; border-top: 1px solid transparent; margin-top: -1px;
-    font-family: var(--mono); font-size: 0.5rem; font-weight: 900;
-    letter-spacing: 0.12em; text-transform: uppercase;
-    color: var(--dim); cursor: pointer; transition: color 0.15s;
-  }
-  .tabbar .tabitem.active { color: var(--accent); border-top-color: var(--accent); }
-  /* The fixed tab bar owns the bottom edge; the status bar would sit underneath it and its
-     content is already in the hudbar, so drop it rather than stack two strips. */
-  .statusbar { display: none; }
-  .wrap { padding: var(--s-3) var(--s-3) 110px; }
-}
 
 /* ojee-ui's .panel--glowtop and .corners each style `::before` on the element they sit on —
    an element only has one, so combining the classes merges the 14px corner bracket with the
